@@ -1,0 +1,8 @@
+{
+  "name": "Project Connect",
+  "description": "A streamlined platform for finding, managing, and collaborating on professional projects and task requirements with ease.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

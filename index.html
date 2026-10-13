@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Velora Commerce — Your Products. Your Brand. Your Online Store.</title>
+    <meta name="description" content="Launch your own branded online store without worrying about technology. Add your products, customize your brand, share your store on WhatsApp, and receive weekly payouts." />
+    <meta property="og:title" content="Velora Commerce — Your Products. Your Brand. Your Online Store." />
+    <meta property="og:description" content="Launch your own branded online store without worrying about technology. Add your products, customize your brand, share your store on WhatsApp, and receive weekly payouts." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Runtime constraint: HMR is disabled in this environment. Suppress harmless Vite client WebSocket disconnect/rejection warnings.
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event && event.reason;
+        var msg = (reason && (reason.message || reason.stack || String(reason))) || '';
+        if (msg.includes('WebSocket') || msg.includes('@vite/client')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var filename = event && event.filename ? event.filename : '';
+        var msg = event && event.message ? event.message : '';
+        if (filename.includes('@vite/client') || msg.includes('WebSocket')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-[#F8FAFC] text-[#111827] antialiased selection:bg-[#2563EB]/15 selection:text-[#2563EB]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
