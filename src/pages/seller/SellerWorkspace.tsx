@@ -91,6 +91,9 @@ export default function SellerWorkspace() {
 
   // Branding & Settings state
   const [brandPreset, setBrandPreset] = useState('Luxury');
+  const [logoUrl, setLogoUrl] = useState<string>('');
+  const [logoCropPosition, setLogoCropPosition] = useState<'center' | 'top' | 'bottom'>('center');
+  const [bannerCropPosition, setBannerCropPosition] = useState<'center' | 'top' | 'bottom'>('center');
   const [primaryColor, setPrimaryColor] = useState('#2563EB');
   const [secondaryColor, setSecondaryColor] = useState('#111827');
   const [buttonStyle, setButtonStyle] = useState('rounded');
@@ -98,6 +101,24 @@ export default function SellerWorkspace() {
   const [cardStyle, setCardStyle] = useState('editorial');
   const [bannerUrl, setBannerUrl] = useState<string>(GENERATED_ASSETS.heroStudio);
   const [previewViewport, setPreviewViewport] = useState<'desktop' | 'mobile'>('desktop');
+
+  // Payment Gateway setup state
+  const [selectedGatewayKey, setSelectedGatewayKey] = useState<string>('razorpay');
+  const [gwEnabled, setGwEnabled] = useState<boolean>(true);
+  const [gwEnvironment, setGwEnvironment] = useState<'sandbox' | 'live'>('sandbox');
+  const [gwDisplayName, setGwDisplayName] = useState<string>('Razorpay Payment Rails');
+  const [gwKeyId, setGwKeyId] = useState<string>('rzp_test_velora_live_9kX2q');
+  const [gwKeySecret, setGwKeySecret] = useState<string>('sec_live_9201a48c9bf4');
+  const [gwWebhookSecret, setGwWebhookSecret] = useState<string>('whsec_velora_2026');
+  const [gwMerchantId, setGwMerchantId] = useState<string>('mid_velora_9941');
+  const [gwAutoCapture, setGwAutoCapture] = useState<boolean>(true);
+  const [gwEnableUpi, setGwEnableUpi] = useState<boolean>(true);
+  const [gwEnableCards, setGwEnableCards] = useState<boolean>(true);
+  const [gwEnableNetbanking, setGwEnableNetbanking] = useState<boolean>(true);
+  const [gwEnableCod, setGwEnableCod] = useState<boolean>(false);
+  const [gwTesting, setGwTesting] = useState<boolean>(false);
+  const [gwTestResult, setGwTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [savingGateway, setSavingGateway] = useState<boolean>(false);
 
   const [storeName, setStoreName] = useState('');
   const [storeTagline, setStoreTagline] = useState('');
@@ -137,12 +158,25 @@ export default function SellerWorkspace() {
     if (!data) return;
     if (data.branding) {
       setBrandPreset(data.branding.preset || 'Luxury');
+      setLogoUrl(data.branding.logoUrl || '');
       setPrimaryColor(data.branding.primaryColor || '#2563EB');
       setSecondaryColor(data.branding.secondaryColor || '#111827');
       setButtonStyle(data.branding.buttonStyle || 'rounded');
       setFontPreset(data.branding.fontPreset || 'Manrope & Plus Jakarta Sans');
       setCardStyle(data.branding.cardStyle || 'editorial');
       setBannerUrl(data.branding.bannerUrl || GENERATED_ASSETS.heroStudio);
+      if (data.branding.logoCropJson) {
+        try {
+          const parsed = JSON.parse(data.branding.logoCropJson);
+          if (parsed.position) setLogoCropPosition(parsed.position);
+        } catch {}
+      }
+      if (data.branding.bannerCropJson) {
+        try {
+          const parsed = JSON.parse(data.branding.bannerCropJson);
+          if (parsed.position) setBannerCropPosition(parsed.position);
+        } catch {}
+      }
     }
     if (data.store) {
       setStoreName(data.store.name || '');
@@ -168,6 +202,24 @@ export default function SellerWorkspace() {
       setBankAccountNumber(data.payoutAccount.bankAccountNumber || '');
       setIfscCode(data.payoutAccount.ifscCode || '');
       setBankName(data.payoutAccount.bankName || '');
+    }
+    if (Array.isArray(data.paymentGateways) && data.paymentGateways.length > 0) {
+      const activeGw = data.paymentGateways.find((g: any) => g.gatewayKey === selectedGatewayKey) || data.paymentGateways[0];
+      if (activeGw) {
+        setSelectedGatewayKey(activeGw.gatewayKey);
+        setGwEnabled(Boolean(activeGw.enabled));
+        setGwEnvironment(activeGw.environment || 'sandbox');
+        setGwDisplayName(activeGw.displayName || `${activeGw.gatewayKey.toUpperCase()} Gateway`);
+        setGwKeyId(activeGw.keyId || '');
+        setGwKeySecret(activeGw.keySecret || '');
+        setGwWebhookSecret(activeGw.webhookSecret || '');
+        setGwMerchantId(activeGw.merchantId || '');
+        setGwAutoCapture(activeGw.autoCapture !== false);
+        setGwEnableUpi(activeGw.enableUpi !== false);
+        setGwEnableCards(activeGw.enableCards !== false);
+        setGwEnableNetbanking(activeGw.enableNetbanking !== false);
+        setGwEnableCod(Boolean(activeGw.enableCod));
+      }
     }
   };
 
@@ -324,6 +376,129 @@ export default function SellerWorkspace() {
     }
   };
 
+  const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setLogoUrl(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleBannerFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setBannerUrl(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSelectGatewayKey = (key: string) => {
+    setSelectedGatewayKey(key);
+    setGwTestResult(null);
+    if (Array.isArray(ctx?.paymentGateways)) {
+      const target = ctx.paymentGateways.find((g: any) => g.gatewayKey === key);
+      if (target) {
+        setGwEnabled(Boolean(target.enabled));
+        setGwEnvironment(target.environment || 'sandbox');
+        setGwDisplayName(target.displayName || `${key.toUpperCase()} Gateway`);
+        setGwKeyId(target.keyId || '');
+        setGwKeySecret(target.keySecret || '');
+        setGwWebhookSecret(target.webhookSecret || '');
+        setGwMerchantId(target.merchantId || '');
+        setGwAutoCapture(target.autoCapture !== false);
+        setGwEnableUpi(target.enableUpi !== false);
+        setGwEnableCards(target.enableCards !== false);
+        setGwEnableNetbanking(target.enableNetbanking !== false);
+        setGwEnableCod(Boolean(target.enableCod));
+      } else {
+        if (key === 'razorpay') {
+          setGwDisplayName('Razorpay Payment Rails');
+          setGwKeyId('rzp_test_velora_live_9kX2q');
+          setGwKeySecret('sec_live_9201a48c9bf4');
+          setGwWebhookSecret('whsec_velora_2026');
+        } else if (key === 'cashfree') {
+          setGwDisplayName('Cashfree Payment Gateway');
+          setGwKeyId('cf_app_991823_sandbox');
+          setGwKeySecret('cf_sec_892837419a');
+          setGwWebhookSecret('whsec_cf_velora');
+        } else if (key === 'stripe') {
+          setGwDisplayName('Stripe Global Checkout');
+          setGwKeyId('pk_test_51Mz9Velora992');
+          setGwKeySecret('sk_test_51Mz9VeloraSec');
+          setGwWebhookSecret('whsec_stripe_velora');
+        } else if (key === 'upi') {
+          setGwDisplayName('Direct UPI & Instant QR');
+          setGwKeyId('velora@okaxis');
+          setGwKeySecret('');
+          setGwWebhookSecret('');
+        }
+      }
+    }
+  };
+
+  const handleSavePaymentGateway = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBannerMsg('');
+    setErrorMsg('');
+    setSavingGateway(true);
+    try {
+      const res = await authFetch('/api/seller/payment-gateways', {
+        method: 'PUT',
+        body: JSON.stringify({
+          gatewayKey: selectedGatewayKey,
+          displayName: gwDisplayName,
+          enabled: gwEnabled,
+          environment: gwEnvironment,
+          keyId: gwKeyId,
+          keySecret: gwKeySecret,
+          webhookSecret: gwWebhookSecret,
+          merchantId: gwMerchantId,
+          autoCapture: gwAutoCapture,
+          enableUpi: gwEnableUpi,
+          enableCards: gwEnableCards,
+          enableNetbanking: gwEnableNetbanking,
+          enableCod: gwEnableCod,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update gateway settings');
+      setBannerMsg(`${gwDisplayName} settings saved successfully (${gwEnvironment.toUpperCase()} mode)!`);
+      await loadContext();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error saving gateway');
+    } finally {
+      setSavingGateway(false);
+    }
+  };
+
+  const handleTestPaymentGateway = async () => {
+    setGwTesting(true);
+    setGwTestResult(null);
+    try {
+      const res = await authFetch('/api/seller/payment-gateways/test', {
+        method: 'POST',
+        body: JSON.stringify({ gatewayKey: selectedGatewayKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Test failed');
+      setGwTestResult({ success: true, message: data.message });
+    } catch (err: any) {
+      setGwTestResult({ success: false, message: err.message || 'Handshake failed' });
+    } finally {
+      setGwTesting(false);
+    }
+  };
+
   const handleSaveBrandingOrSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setBannerMsg('');
@@ -333,12 +508,15 @@ export default function SellerWorkspace() {
         method: 'PUT',
         body: JSON.stringify({
           preset: brandPreset,
+          logoUrl,
+          bannerUrl,
+          logoCropJson: JSON.stringify({ position: logoCropPosition, zoom: 1 }),
+          bannerCropJson: JSON.stringify({ position: bannerCropPosition, zoom: 1 }),
           primaryColor,
           secondaryColor,
           buttonStyle,
           fontPreset,
           cardStyle,
-          bannerUrl,
           name: storeName,
           tagline: storeTagline,
           about: storeAbout,
@@ -562,6 +740,7 @@ export default function SellerWorkspace() {
     { label: 'Wallet', path: '/app/wallet', icon: WalletIcon },
     { label: 'Payouts', path: '/app/payouts', icon: Landmark },
     { label: 'Branding', path: '/app/branding', icon: Palette },
+    { label: 'Payment Gateway', path: '/app/payment-gateways', icon: CreditCard },
     { label: 'Store Settings', path: '/app/settings', icon: Settings },
     {
       label: 'Notifications',
@@ -2112,6 +2291,187 @@ export default function SellerWorkspace() {
                   </div>
                 </div>
 
+                {/* Logo & Banner Customization Module */}
+                <div className="pt-3 border-t border-[#E5E7EB] space-y-4">
+                  <div>
+                    <h3 className="font-display font-bold text-xs text-[#111827]">
+                      Storefront Logo & Visual Identity
+                    </h3>
+                    <p className="text-[11px] text-[#6B7280]">
+                      Upload your high-resolution store logo (square 1:1) or enter an image URL.
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-3">
+                    <div className="w-16 h-16 rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] overflow-hidden shrink-0 flex items-center justify-center">
+                      {logoUrl ? (
+                        <img
+                          src={logoUrl}
+                          alt="Logo Preview"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-[10px] text-[#9CA3AF] font-bold">NO LOGO</span>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={logoUrl}
+                          onChange={(e) => setLogoUrl(e.target.value)}
+                          placeholder="https://example.com/logo.png or upload below"
+                          className="w-full px-2.5 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] text-xs"
+                        />
+                        {logoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setLogoUrl('')}
+                            className="px-2 py-1.5 text-[11px] text-[#DC2626] hover:bg-red-50 rounded-[6px]"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-[#E5E7EB] hover:bg-gray-50 text-[11px] font-medium text-[#111827] rounded-[6px]">
+                          <Upload className="w-3 h-3 text-[#2563EB]" />
+                          <span>Upload File</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleLogoFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                        <select
+                          value={logoCropPosition}
+                          onChange={(e) => setLogoCropPosition(e.target.value as any)}
+                          className="px-2 py-1 bg-white border border-[#E5E7EB] rounded-[6px] text-[11px]"
+                        >
+                          <option value="center">Align: Center</option>
+                          <option value="top">Align: Top</option>
+                          <option value="bottom">Align: Bottom</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Curated Logo Presets */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-semibold text-[#6B7280]">
+                      Curated Brand Logo Presets:
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLogoUrl(
+                            'https://images.unsplash.com/photo-1544816155-12df9643f363?w=300&auto=format&fit=crop&q=80'
+                          )
+                        }
+                        className="p-1.5 text-left border border-[#E5E7EB] rounded-[6px] hover:bg-gray-50 text-[10px]"
+                      >
+                        <div className="font-semibold text-[#111827]">Atelier Crest</div>
+                        <div className="text-[#9CA3AF]">Gold foil emblem</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLogoUrl(
+                            'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=300&auto=format&fit=crop&q=80'
+                          )
+                        }
+                        className="p-1.5 text-left border border-[#E5E7EB] rounded-[6px] hover:bg-gray-50 text-[10px]"
+                      >
+                        <div className="font-semibold text-[#111827]">Modern Monogram</div>
+                        <div className="text-[#9CA3AF]">Minimalist studio</div>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hero Banner Customization Module */}
+                <div className="pt-3 border-t border-[#E5E7EB] space-y-4">
+                  <div>
+                    <h3 className="font-display font-bold text-xs text-[#111827]">
+                      Storefront Hero Banner (16:10 Wide)
+                    </h3>
+                    <p className="text-[11px] text-[#6B7280]">
+                      Sets the prominent hero banner on your public storefront homepage.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="aspect-[16/7] w-full rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] overflow-hidden">
+                      <SafeImage
+                        src={bannerUrl}
+                        alt="Hero Banner Preview"
+                        className={`w-full h-full object-cover ${
+                          bannerCropPosition === 'top'
+                            ? 'object-top'
+                            : bannerCropPosition === 'bottom'
+                            ? 'object-bottom'
+                            : 'object-center'
+                        }`}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={bannerUrl}
+                        onChange={(e) => setBannerUrl(e.target.value)}
+                        placeholder="Banner image URL..."
+                        className="w-full px-2.5 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] text-xs"
+                      />
+                      <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1.5 bg-white border border-[#E5E7EB] hover:bg-gray-50 text-[11px] font-medium text-[#111827] rounded-[8px] shrink-0">
+                        <Upload className="w-3 h-3 text-[#2563EB]" />
+                        <span>Upload</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleBannerFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                      <select
+                        value={bannerCropPosition}
+                        onChange={(e) => setBannerCropPosition(e.target.value as any)}
+                        className="px-2 py-1.5 bg-white border border-[#E5E7EB] rounded-[8px] text-[11px] shrink-0"
+                      >
+                        <option value="center">Crop: Center</option>
+                        <option value="top">Crop: Top</option>
+                        <option value="bottom">Crop: Bottom</option>
+                      </select>
+                    </div>
+
+                    {/* Curated Banner Presets */}
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-semibold text-[#6B7280]">
+                        Curated Editorial Banner Presets:
+                      </span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setBannerUrl(GENERATED_ASSETS.heroStudio)}
+                          className="p-1.5 text-left border border-[#E5E7EB] rounded-[6px] hover:bg-gray-50 text-[10px]"
+                        >
+                          <div className="font-semibold text-[#111827]">Velora Studio</div>
+                          <div className="text-[#9CA3AF]">Warm atelier showroom</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBannerUrl(GENERATED_ASSETS.leatherTote)}
+                          className="p-1.5 text-left border border-[#E5E7EB] rounded-[6px] hover:bg-gray-50 text-[10px]"
+                        >
+                          <div className="font-semibold text-[#111827]">Artisanal Workshop</div>
+                          <div className="text-[#9CA3AF]">Handcrafted leathercraft</div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   className="w-full py-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-[10px]"
@@ -2161,10 +2521,24 @@ export default function SellerWorkspace() {
                     previewViewport === 'mobile' ? 'max-w-[360px]' : 'w-full'
                   }`}
                 >
+                  {/* Preview Brand Header with Logo */}
                   <div className="px-4 py-3 border-b border-[#E5E7EB] flex items-center justify-between">
-                    <span className="font-display font-bold text-sm" style={{ color: secondaryColor }}>
-                      {storeName || store.name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {logoUrl ? (
+                        <img
+                          src={logoUrl}
+                          alt="Brand Logo"
+                          className="w-7 h-7 rounded-[6px] object-cover border border-[#E5E7EB]"
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-[6px] bg-gray-100 border border-[#E5E7EB] flex items-center justify-center font-bold text-[10px] text-gray-500">
+                          {(storeName || store.name || 'V').slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="font-display font-bold text-sm" style={{ color: secondaryColor }}>
+                        {storeName || store.name}
+                      </span>
+                    </div>
                     <span
                       style={{ backgroundColor: primaryColor }}
                       className={`px-3 py-1 text-[11px] font-semibold text-white ${
@@ -2183,7 +2557,13 @@ export default function SellerWorkspace() {
                       <SafeImage
                         src={bannerUrl}
                         alt="Banner Preview"
-                        className="w-full h-full object-cover"
+                        className={`w-full h-full object-cover ${
+                          bannerCropPosition === 'top'
+                            ? 'object-top'
+                            : bannerCropPosition === 'bottom'
+                            ? 'object-bottom'
+                            : 'object-center'
+                        }`}
                       />
                     </div>
                     <div className="space-y-1">
@@ -2221,6 +2601,329 @@ export default function SellerWorkspace() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* VIEW: PAYMENT GATEWAYS & CHECKOUT SETUP (/app/payment-gateways) */}
+          {/* ============================================================== */}
+          {pathname === '/app/payment-gateways' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-[#E5E7EB] rounded-[12px] p-6">
+                <div>
+                  <h1 className="font-display text-xl font-bold text-[#111827] flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-[#2563EB]" />
+                    <span>Payment Gateway & Checkout Rails</span>
+                  </h1>
+                  <p className="text-xs text-[#6B7280] mt-1 max-w-2xl leading-relaxed">
+                    Configure your payment provider for automated WhatsApp order checkout and customer payment links.
+                    Server-authoritative 10% platform fee calculation and HMAC webhook signature verification are enforced fail-closed.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs px-2.5 py-1 rounded-[6px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Auto Settlement: Enabled
+                  </span>
+                </div>
+              </div>
+
+              {/* Provider Selection Tabs */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  {
+                    key: 'razorpay',
+                    name: 'Razorpay',
+                    desc: 'UPI, Cards & Netbanking',
+                    badge: 'Popular (India)',
+                  },
+                  {
+                    key: 'cashfree',
+                    name: 'Cashfree',
+                    desc: 'Instant UPI Intent & Cards',
+                    badge: 'Fast Checkout',
+                  },
+                  {
+                    key: 'stripe',
+                    name: 'Stripe',
+                    desc: 'Global Cards & Currencies',
+                    badge: 'International',
+                  },
+                  {
+                    key: 'upi',
+                    name: 'Direct UPI / QR',
+                    desc: 'VPA Instant P2M Rail',
+                    badge: 'Zero Setup',
+                  },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => handleSelectGatewayKey(item.key)}
+                    className={`p-4 rounded-[12px] border text-left transition-all ${
+                      selectedGatewayKey === item.key
+                        ? 'border-[#2563EB] bg-blue-50/20 ring-1 ring-[#2563EB] shadow-xs'
+                        : 'border-[#E5E7EB] bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-display font-bold text-sm text-[#111827]">
+                        {item.name}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-slate-100 text-[#4B5563] font-medium">
+                        {item.badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#6B7280] mt-1">{item.desc}</p>
+                  </button>
+                ))}
+              </div>
+
+              {/* Gateway Configuration Form */}
+              <form
+                onSubmit={handleSavePaymentGateway}
+                className="bg-white border border-[#E5E7EB] rounded-[12px] p-6 sm:p-8 space-y-6 text-xs max-w-3xl"
+              >
+                <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-4">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#111827]">
+                      {gwDisplayName} Configuration
+                    </h2>
+                    <p className="text-[11px] text-[#6B7280] mt-0.5">
+                      Enter your API credentials from your {selectedGatewayKey.toUpperCase()} dashboard.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer font-semibold text-xs text-[#111827]">
+                      <input
+                        type="checkbox"
+                        checked={gwEnabled}
+                        onChange={(e) => setGwEnabled(e.target.checked)}
+                        className="rounded-[4px] text-[#2563EB] focus:ring-0"
+                      />
+                      <span>Active for Storefront</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-semibold mb-1">Display Name in Checkout</label>
+                    <input
+                      type="text"
+                      value={gwDisplayName}
+                      onChange={(e) => setGwDisplayName(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]"
+                      placeholder="e.g. Razorpay Secure Checkout"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Environment Mode</label>
+                    <select
+                      value={gwEnvironment}
+                      onChange={(e) => setGwEnvironment(e.target.value as any)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]"
+                    >
+                      <option value="sandbox">Sandbox / Test Mode (Safe Testing)</option>
+                      <option value="live">Live / Production (Real Money Processing)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-semibold mb-1">
+                      {selectedGatewayKey === 'upi' ? 'UPI VPA / ID' : 'Key ID / App ID'}
+                    </label>
+                    <input
+                      type="text"
+                      value={gwKeyId}
+                      onChange={(e) => setGwKeyId(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                      placeholder={
+                        selectedGatewayKey === 'upi'
+                          ? 'merchant@upi'
+                          : selectedGatewayKey === 'stripe'
+                          ? 'pk_live_...'
+                          : 'rzp_test_...'
+                      }
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">
+                      {selectedGatewayKey === 'upi' ? 'Merchant Name' : 'Key Secret / App Secret'}
+                    </label>
+                    <input
+                      type="password"
+                      value={gwKeySecret}
+                      onChange={(e) => setGwKeySecret(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                      placeholder="••••••••••••••••••••••••"
+                    />
+                  </div>
+                </div>
+
+                {selectedGatewayKey !== 'upi' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-semibold mb-1">Webhook Secret (HMAC-SHA256)</label>
+                      <input
+                        type="text"
+                        value={gwWebhookSecret}
+                        onChange={(e) => setGwWebhookSecret(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                        placeholder="whsec_..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold mb-1">Merchant Account ID (Optional)</label>
+                      <input
+                        type="text"
+                        value={gwMerchantId}
+                        onChange={(e) => setGwMerchantId(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                        placeholder="mid_..."
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Methods and Capabilities */}
+                <div className="space-y-2 pt-2 border-t border-[#E5E7EB]">
+                  <label className="block font-semibold">Enabled Payment Methods</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <label className="flex items-center gap-2 p-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={gwEnableUpi}
+                        onChange={(e) => setGwEnableUpi(e.target.checked)}
+                        className="rounded-[4px] text-[#2563EB]"
+                      />
+                      <span>UPI & QR</span>
+                    </label>
+                    <label className="flex items-center gap-2 p-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={gwEnableCards}
+                        onChange={(e) => setGwEnableCards(e.target.checked)}
+                        className="rounded-[4px] text-[#2563EB]"
+                      />
+                      <span>Credit / Debit Cards</span>
+                    </label>
+                    <label className="flex items-center gap-2 p-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={gwEnableNetbanking}
+                        onChange={(e) => setGwEnableNetbanking(e.target.checked)}
+                        className="rounded-[4px] text-[#2563EB]"
+                      />
+                      <span>Netbanking</span>
+                    </label>
+                    <label className="flex items-center gap-2 p-2 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={gwEnableCod}
+                        onChange={(e) => setGwEnableCod(e.target.checked)}
+                        className="rounded-[4px] text-[#2563EB]"
+                      />
+                      <span>Cash on Delivery</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Webhook Endpoint Callout */}
+                <div className="p-4 rounded-[10px] bg-slate-50 border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[#111827]">Server Webhook Endpoint</span>
+                    <span className="text-[10px] font-mono text-[#2563EB] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                      HMAC Verification Active
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#6B7280]">
+                    Configure this URL in your {selectedGatewayKey.toUpperCase()} Webhook settings to receive instant payment confirmation events:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 p-2 bg-white border border-[#E5E7EB] rounded-[6px] font-mono text-[11px] text-[#111827] select-all">
+                      {window.location.origin}/api/webhooks/payment
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(
+                          `${window.location.origin}/api/webhooks/payment`
+                        );
+                        setBannerMsg('Webhook URL copied to clipboard!');
+                      }}
+                      className="px-3 py-2 bg-white border border-[#E5E7EB] hover:bg-gray-50 text-[11px] font-semibold text-[#111827] rounded-[6px]"
+                    >
+                      Copy URL
+                    </button>
+                  </div>
+                </div>
+
+                {/* Test Result Message */}
+                {gwTestResult && (
+                  <div
+                    className={`p-3 rounded-[8px] text-xs font-medium flex items-center gap-2 ${
+                      gwTestResult.success
+                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        : 'bg-red-50 text-red-800 border border-red-200'
+                    }`}
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{gwTestResult.message}</span>
+                  </div>
+                )}
+
+                {/* Form Actions */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#E5E7EB]">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={gwTesting}
+                      onClick={handleTestPaymentGateway}
+                      className="px-4 py-2.5 bg-white border border-[#E5E7EB] hover:bg-gray-50 text-xs font-semibold text-[#111827] rounded-[8px]"
+                    >
+                      {gwTesting ? 'Testing Handshake...' : 'Test Connection & Webhook'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedGatewayKey === 'razorpay') {
+                          setGwKeyId('rzp_test_velora_live_9kX2q');
+                          setGwKeySecret('sec_live_9201a48c9bf4');
+                          setGwWebhookSecret('whsec_velora_2026');
+                        } else if (selectedGatewayKey === 'cashfree') {
+                          setGwKeyId('cf_app_991823_sandbox');
+                          setGwKeySecret('cf_sec_892837419a');
+                          setGwWebhookSecret('whsec_cf_velora');
+                        } else if (selectedGatewayKey === 'stripe') {
+                          setGwKeyId('pk_test_51Mz9Velora992');
+                          setGwKeySecret('sk_test_51Mz9VeloraSec');
+                          setGwWebhookSecret('whsec_stripe_velora');
+                        } else if (selectedGatewayKey === 'upi') {
+                          setGwKeyId('velora@okaxis');
+                          setGwKeySecret('');
+                        }
+                        setBannerMsg(`Pre-filled verified ${selectedGatewayKey.toUpperCase()} sandbox credentials.`);
+                      }}
+                      className="px-3 py-2 text-xs text-[#2563EB] hover:underline"
+                    >
+                      Fill Demo Test Keys
+                    </button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingGateway}
+                    className="px-6 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-[8px]"
+                  >
+                    {savingGateway ? 'Saving...' : 'Save Gateway Configuration'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 

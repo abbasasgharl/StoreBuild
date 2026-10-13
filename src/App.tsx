@@ -30,11 +30,12 @@ export default function App() {
         <Route path="/app/wallet" element={<SellerWorkspace />} />
         <Route path="/app/payouts" element={<SellerWorkspace />} />
         <Route path="/app/branding" element={<SellerWorkspace />} />
+        <Route path="/app/payment-gateways" element={<SellerWorkspace />} />
         <Route path="/app/settings" element={<SellerWorkspace />} />
         <Route path="/app/notifications" element={<SellerWorkspace />} />
         <Route path="/app/support" element={<SellerWorkspace />} />
 
-        {/* Admin Console Surface (14 Specification v2.0 Modules) */}
+        {/* Admin Console Surface (15 Modules including Payment Gateways) */}
         <Route path="/admin" element={<AdminConsolePage />} />
         <Route path="/admin/sellers" element={<AdminConsolePage />} />
         <Route path="/admin/stores" element={<AdminConsolePage />} />
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/admin/orders" element={<AdminConsolePage />} />
         <Route path="/admin/wallet" element={<AdminConsolePage />} />
         <Route path="/admin/payouts" element={<AdminConsolePage />} />
+        <Route path="/admin/gateways" element={<AdminConsolePage />} />
         <Route path="/admin/disputes" element={<AdminConsolePage />} />
         <Route path="/admin/tickets" element={<AdminConsolePage />} />
         <Route path="/admin/rbac" element={<AdminConsolePage />} />

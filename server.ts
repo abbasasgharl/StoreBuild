@@ -284,6 +284,17 @@ async function startServer() {
     }
   };
 
+  const adminGuard: express.RequestHandler = async (req, res, next) => {
+    try {
+      const [{ requireAuth, requireAdmin }] = await modulesPromise;
+      await requireAuth(req as AuthRequest, res, async () => {
+        await requireAdmin(req as AuthRequest, res, next);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   // Authenticated Seller Tenant-Scoped APIs
   api.get('/seller/context', authGuard, async (req: AuthRequest, res) => {
     try {
@@ -407,8 +418,42 @@ async function startServer() {
     }
   });
 
-  // Admin Console APIs (All 14 Modules)
-  api.get('/admin/overview', authGuard, async (_req: AuthRequest, res) => {
+  // Seller Payment Gateway Setup & Testing APIs
+  api.get('/seller/payment-gateways', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const uid = req.user?.uid || 'seller-velora-uid';
+      const gateways = await repo.getStorePaymentGateways(uid);
+      res.json(gateways);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load store payment gateways' });
+    }
+  });
+
+  api.put('/seller/payment-gateways', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const uid = req.user?.uid || 'seller-velora-uid';
+      const updated = await repo.updateStorePaymentGatewaySettings(uid, req.body);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to update payment gateway' });
+    }
+  });
+
+  api.post('/seller/payment-gateways/test', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const uid = req.user?.uid || 'seller-velora-uid';
+      const result = await repo.testStorePaymentGatewayConnection(uid, req.body.gatewayKey);
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Payment gateway connection test failed' });
+    }
+  });
+
+  // Admin Console APIs (Protected with fail-closed adminGuard)
+  api.get('/admin/overview', adminGuard, async (_req: AuthRequest, res) => {
     try {
       const cached = getCached('admin_overview');
       if (cached) {
@@ -423,7 +468,7 @@ async function startServer() {
     }
   });
 
-  api.post('/admin/action', authGuard, async (req: AuthRequest, res) => {
+  api.post('/admin/action', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.executeAdminGovernanceAction({
@@ -437,7 +482,7 @@ async function startServer() {
   });
 
   // Specification v2.0 Section 9: Co-Worker Agent Bounded Execution, Approval Queue & Kill Switch
-  api.post('/admin/agent/run', authGuard, async (req: AuthRequest, res) => {
+  api.post('/admin/agent/run', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.runCoworkerAgentTask(req.body);
@@ -447,7 +492,7 @@ async function startServer() {
     }
   });
 
-  api.post('/admin/agent/actions/:actionId', authGuard, async (req: AuthRequest, res) => {
+  api.post('/admin/agent/actions/:actionId', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.handleAgentApprovalAction({
@@ -461,7 +506,7 @@ async function startServer() {
     }
   });
 
-  api.post('/admin/agent/kill-switch', authGuard, async (req: AuthRequest, res) => {
+  api.post('/admin/agent/kill-switch', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.toggleAgentEmergencyKillSwitch(
@@ -475,7 +520,7 @@ async function startServer() {
   });
 
   // Specification v2.0 Section 10 & 11: SEO Control Panel & Ads/Analytics Settings
-  api.put('/admin/seo', authGuard, async (req: AuthRequest, res) => {
+  api.put('/admin/seo', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.updateGlobalSeoSettings(
@@ -488,7 +533,7 @@ async function startServer() {
     }
   });
 
-  api.put('/admin/ads', authGuard, async (req: AuthRequest, res) => {
+  api.put('/admin/ads', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.updateAdIntegrationSettings(
@@ -498,6 +543,43 @@ async function startServer() {
       res.json(overview);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Failed to update ad integration settings' });
+    }
+  });
+
+  // Admin Payment Gateways Governance APIs
+  api.get('/admin/payment-gateways', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const gateways = await repo.getAdminPaymentGateways();
+      res.json(gateways);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load platform payment gateways' });
+    }
+  });
+
+  api.put('/admin/payment-gateways', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const overview = await repo.updateAdminPaymentGateway(
+        req.user?.uid || 'admin-console-root',
+        req.body
+      );
+      res.json(overview);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to update platform payment gateway' });
+    }
+  });
+
+  api.post('/admin/payment-gateways/test', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const result = await repo.testAdminPaymentGateway(
+        req.user?.uid || 'admin-console-root',
+        req.body.gatewayKey
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to test platform payment gateway' });
     }
   });
 

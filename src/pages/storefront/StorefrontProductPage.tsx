@@ -183,6 +183,13 @@ export default function StorefrontProductPage() {
           className="text-sm font-semibold text-[#111827] flex items-center gap-2 hover:text-[#2563EB]"
         >
           <ArrowLeft className="w-4 h-4" />
+          {branding?.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={store.name}
+              className="w-6 h-6 rounded-[5px] object-cover border border-[#E5E7EB]"
+            />
+          ) : null}
           <span>{store.name}</span>
         </Link>
         <div className="font-mono text-xs text-[#6B7280]">

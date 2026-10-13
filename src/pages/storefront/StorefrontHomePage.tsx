@@ -178,9 +178,16 @@ export default function StorefrontHomePage() {
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-[#E5E7EB] px-6 lg:px-12 h-16 flex items-center justify-between">
         <Link
           to={`/${store.slug}`}
-          className="font-display text-xl font-extrabold tracking-tight text-[#111827] whitespace-nowrap shrink-0"
+          className="flex items-center gap-2.5 font-display text-xl font-extrabold tracking-tight text-[#111827] whitespace-nowrap shrink-0"
         >
-          {store.name}
+          {branding?.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={store.name}
+              className="w-8 h-8 rounded-[8px] object-cover border border-[#E5E7EB]"
+            />
+          ) : null}
+          <span>{store.name}</span>
         </Link>
 
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-[#6B7280]">
@@ -271,7 +278,16 @@ export default function StorefrontHomePage() {
               <SafeImage
                 src={branding?.bannerUrl}
                 alt={store.name}
-                className="w-full h-full object-cover"
+                className={`w-full h-full object-cover ${
+                  (() => {
+                    try {
+                      const parsed = branding?.bannerCropJson ? JSON.parse(branding.bannerCropJson) : null;
+                      if (parsed?.position === 'top') return 'object-top';
+                      if (parsed?.position === 'bottom') return 'object-bottom';
+                    } catch {}
+                    return 'object-center';
+                  })()
+                }`}
               />
             </div>
           </div>

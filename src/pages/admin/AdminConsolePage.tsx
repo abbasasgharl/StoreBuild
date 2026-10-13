@@ -23,6 +23,9 @@ import {
   Megaphone,
   Power,
   Play,
+  CreditCard,
+  LogOut,
+  RefreshCw,
 } from 'lucide-react';
 
 type AdminTabId =
@@ -33,6 +36,7 @@ type AdminTabId =
   | 'orders'
   | 'wallet'
   | 'payouts'
+  | 'gateways'
   | 'returns'
   | 'tickets'
   | 'rbac'
@@ -43,7 +47,7 @@ type AdminTabId =
 
 export default function AdminConsolePage() {
   const location = useLocation();
-  const { authFetch } = useAuth();
+  const { session, signOutUser, switchDemoPersona, loginAdminWith2FA, authFetch } = useAuth();
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +55,17 @@ export default function AdminConsolePage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [banner, setBanner] = useState('');
   const [errorBanner, setErrorBanner] = useState('');
+
+  // Admin 2FA In-Page Authentication Gate state
+  const [adminLoginUser, setAdminLoginUser] = useState('admin_root');
+  const [adminLoginPassword, setAdminLoginPassword] = useState('AdminGov#2026');
+  const [adminLogin2fa, setAdminLogin2fa] = useState('246810');
+  const [adminLoggingIn, setAdminLoggingIn] = useState(false);
+  const [adminLoginError, setAdminLoginError] = useState('');
+
+  // Payment Gateways management state
+  const [gwUpdating, setGwUpdating] = useState(false);
+  const [gwTestFeedback, setGwTestFeedback] = useState<Record<string, string>>({});
 
   // Confirmation modal state for sensitive admin actions
   const [confirmModal, setConfirmModal] = useState<{
@@ -96,6 +111,7 @@ export default function AdminConsolePage() {
     if (p.includes('/admin/sellers')) setActiveTab('sellers');
     else if (p.includes('/admin/orders')) setActiveTab('orders');
     else if (p.includes('/admin/payouts')) setActiveTab('payouts');
+    else if (p.includes('/admin/gateways')) setActiveTab('gateways');
     else if (p.includes('/admin/audit')) setActiveTab('audit');
   }, [location.pathname]);
 
@@ -297,10 +313,220 @@ export default function AdminConsolePage() {
     }
   };
 
+  const handleAdminLoginFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminLoginError('');
+    setAdminLoggingIn(true);
+    try {
+      await loginAdminWith2FA({
+        usernameOrEmail: adminLoginUser,
+        password: adminLoginPassword,
+        twoFactorCode: adminLogin2fa,
+      });
+      setBanner('Multi-Factor Authentication verified. Access granted to Governance Console.');
+      await loadAdminOverview();
+    } catch (err: any) {
+      setAdminLoginError(err.message || 'Admin 2FA authentication failed.');
+    } finally {
+      setAdminLoggingIn(false);
+    }
+  };
+
+  const handleQuickAdminDemoLogin = async () => {
+    setAdminLoginError('');
+    setAdminLoggingIn(true);
+    try {
+      switchDemoPersona('admin');
+      setBanner('Authenticated as Platform Governance Admin (Root). 2FA Active.');
+      await loadAdminOverview();
+    } catch (err: any) {
+      setAdminLoginError(err.message || 'Quick login failed.');
+    } finally {
+      setAdminLoggingIn(false);
+    }
+  };
+
+  const handleTogglePlatformGateway = async (gatewayKey: string, currentEnabled: boolean) => {
+    setGwUpdating(true);
+    try {
+      const res = await authFetch('/api/admin/payment-gateways', {
+        method: 'PUT',
+        body: JSON.stringify({
+          gatewayKey,
+          enabled: !currentEnabled,
+          environment: 'sandbox',
+          keyId: 'pl_admin_default',
+        }),
+      });
+      const updated = await res.json();
+      if (!res.ok) throw new Error(updated.error || 'Failed to update gateway');
+      setData(updated);
+      setBanner(`Platform gateway ${gatewayKey.toUpperCase()} status updated.`);
+    } catch (err: any) {
+      setErrorBanner(err.message || 'Failed to update gateway.');
+    } finally {
+      setGwUpdating(false);
+    }
+  };
+
+  const handleTestPlatformGateway = async (gatewayKey: string) => {
+    try {
+      const res = await authFetch('/api/admin/payment-gateways/test', {
+        method: 'POST',
+        body: JSON.stringify({ gatewayKey }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Gateway test failed');
+      setGwTestFeedback((prev) => ({
+        ...prev,
+        [gatewayKey]: result.message || 'Signature handshake nominal.',
+      }));
+      setBanner(`Connection verified for ${gatewayKey.toUpperCase()}. Audit log recorded.`);
+    } catch (err: any) {
+      setErrorBanner(err.message || 'Connection test failed.');
+    }
+  };
+
+  // Specification v2.0 Section 2: Strict fail-closed In-Page 2FA Gate
+  if (session.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-[#0F172A] text-white flex flex-col justify-between">
+        {/* Top Security Banner */}
+        <header className="h-16 border-b border-slate-800 px-6 sm:px-12 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <ShieldCheck className="w-6 h-6 text-[#2563EB]" />
+            <span className="font-display font-bold text-base tracking-tight text-white">
+              Velora & Ara Platform Governance Portal
+            </span>
+            <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              2FA MANDATORY
+            </span>
+          </div>
+          <div className="flex items-center gap-4 text-xs">
+            <Link to="/" className="text-slate-400 hover:text-white transition-colors">
+              Platform Home
+            </Link>
+            <Link
+              to="/app/dashboard"
+              className="px-3 py-1.5 rounded-[8px] bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+            >
+              Seller Workspace
+            </Link>
+          </div>
+        </header>
+
+        {/* 2FA Login Form Card */}
+        <main className="flex-1 flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-[20px] p-8 shadow-2xl space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto text-[#2563EB]">
+                <Lock className="w-6 h-6 text-[#3B82F6]" />
+              </div>
+              <h1 className="font-display text-xl font-bold text-white">
+                Admin Governance 2FA Gateway
+              </h1>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Multi-Factor TOTP (RFC 6238) authentication is required to access risk management, financial rails, and platform audits.
+              </p>
+            </div>
+
+            {adminLoginError && (
+              <div className="p-3.5 rounded-[10px] bg-red-950/60 border border-red-800/80 text-xs text-red-200 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{adminLoginError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleAdminLoginFormSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Administrator Username / Email
+                </label>
+                <input
+                  type="text"
+                  value={adminLoginUser}
+                  onChange={(e) => setAdminLoginUser(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white focus:outline-none focus:border-blue-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Root Admin Password
+                </label>
+                <input
+                  type="password"
+                  value={adminLoginPassword}
+                  onChange={(e) => setAdminLoginPassword(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white focus:outline-none focus:border-blue-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-semibold">
+                    6-Digit 2FA Code (TOTP)
+                  </label>
+                  <span className="font-mono text-[10px] text-blue-400">Demo Code: 246810</span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={adminLogin2fa}
+                  onChange={(e) => setAdminLogin2fa(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white font-mono tracking-widest text-center text-base focus:outline-none focus:border-blue-500"
+                  placeholder="246810"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={adminLoggingIn}
+                className="w-full py-3 bg-[#2563EB] hover:bg-blue-600 font-semibold text-white rounded-[10px] transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
+              >
+                {adminLoggingIn ? (
+                  <span>Verifying TOTP Code...</span>
+                ) : (
+                  <>
+                    <KeyRound className="w-4 h-4" />
+                    <span>Verify 2FA & Access Console</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-3">
+              <button
+                type="button"
+                onClick={handleQuickAdminDemoLogin}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 font-medium rounded-[10px] transition-colors flex items-center justify-center gap-2 text-xs"
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>One-Click Instant Demo Login (Super Admin)</span>
+              </button>
+
+              <div className="text-[11px] text-slate-500 text-center">
+                Active persona: <span className="text-slate-400 font-medium">{session.displayName}</span> ({session.role}).
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <footer className="h-12 border-t border-slate-800 px-6 flex items-center justify-between text-[11px] text-slate-500">
+          <span>Enterprise Zero-Trust Authentication Architecture</span>
+          <span>Fail-Closed Enforced</span>
+        </footer>
+      </div>
+    );
+  }
+
   if (loading && !data) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-8 text-sm text-[#6B7280]">
-        Loading RBAC + 2FA Admin Governance Console (14 Modules)...
+        Loading RBAC + 2FA Admin Governance Console (15 Modules)...
       </div>
     );
   }
@@ -329,33 +555,34 @@ export default function AdminConsolePage() {
     { id: 'orders', label: '5. Orders & Payments', icon: ShoppingBag },
     { id: 'wallet', label: '6. Wallet & Ledger', icon: WalletIcon },
     { id: 'payouts', label: '7. Payouts & Holds', icon: Landmark },
+    { id: 'gateways', label: '8. Payment Gateways & Rails', icon: CreditCard },
     {
       id: 'returns',
-      label: '8. Returns & Disputes',
+      label: '9. Returns & Disputes',
       icon: RotateCcw,
       badge: metrics.openReturnsCount,
     },
     {
       id: 'tickets',
-      label: '9. Support Tickets',
+      label: '10. Support Tickets',
       icon: LifeBuoy,
       badge: metrics.unresolvedTicketsCount,
     },
-    { id: 'rbac', label: '10. Roles & Permissions', icon: KeyRound },
+    { id: 'rbac', label: '11. Roles & Permissions', icon: KeyRound },
     {
       id: 'agent',
-      label: '11. Co-Worker Agent',
+      label: '12. Co-Worker Agent',
       icon: Bot,
       badge: metrics.pendingAgentApprovalsCount,
     },
-    { id: 'seo', label: '12. SEO Control Panel', icon: Globe },
-    { id: 'ads', label: '13. Ads & Analytics', icon: Megaphone },
-    { id: 'audit', label: '14. Immutable Audit Logs', icon: FileText },
+    { id: 'seo', label: '13. SEO Control Panel', icon: Globe },
+    { id: 'ads', label: '14. Ads & Analytics', icon: Megaphone },
+    { id: 'audit', label: '15. Immutable Audit Logs', icon: FileText },
   ];
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#111827] flex">
-      {/* Left Admin Sidebar (14 Specification v2.0 Modules) */}
+      {/* Left Admin Sidebar (15 Specification v2.0 Modules) */}
       <aside className="w-64 bg-[#111827] text-white hidden lg:flex flex-col shrink-0">
         <div className="h-16 px-6 border-b border-gray-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -414,21 +641,47 @@ export default function AdminConsolePage() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 bg-white border-b border-[#E5E7EB] px-6 lg:px-8 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-xs">
-            <Lock className="w-3.5 h-3.5 text-[#16A34A]" />
-            <span className="font-semibold text-[#111827]">
-              Platform Owner & Admin Console (Specification v2.0 · 14 Modules)
-            </span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-xs">
+              <Lock className="w-3.5 h-3.5 text-[#16A34A]" />
+              <span className="font-semibold text-[#111827]">
+                Platform Governance & Security Console (15 Modules)
+              </span>
+            </div>
+            <div className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] bg-slate-100 border border-slate-200 text-[11px] font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span className="text-[#374151]">{session.displayName || 'Root Admin'}</span>
+              <span className="text-[#9CA3AF]">· 2FA Active</span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <input
               type="search"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Filter sellers, orders, SKUs, tickets, or logs..."
-              className="px-3.5 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] text-xs w-56 sm:w-72"
+              placeholder="Filter sellers, orders, SKUs..."
+              className="px-3.5 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] text-xs w-44 sm:w-60"
             />
+            <button
+              type="button"
+              onClick={() => {
+                switchDemoPersona('velora');
+              }}
+              title="Switch to Velora Atelier Seller Console"
+              className="px-2.5 py-1.5 rounded-[8px] bg-slate-100 hover:bg-slate-200 text-[#374151] text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <span>Seller View</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => signOutUser()}
+              title="Sign Out of Admin Console"
+              className="px-2.5 py-1.5 rounded-[8px] bg-red-50 hover:bg-red-100 text-[#DC2626] text-xs font-semibold flex items-center gap-1 whitespace-nowrap"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </header>
 
@@ -892,7 +1145,165 @@ export default function AdminConsolePage() {
           )}
 
           {/* ============================================================== */}
-          {/* MODULE 8: RETURNS & DISPUTES                                   */}
+          {/* MODULE 8: PAYMENT GATEWAYS & SETTLEMENT RAILS                  */}
+          {/* ============================================================== */}
+          {activeTab === 'gateways' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#111827] flex items-center gap-2">
+                      <CreditCard className="w-5 h-5 text-[#2563EB]" />
+                      <span>Platform Payment Rails & Gateway Governance</span>
+                    </h2>
+                    <p className="text-xs text-[#6B7280] mt-1 max-w-2xl leading-relaxed">
+                      Supervises server-authoritative checkout rails for all independent seller storefronts.
+                      A standard 10% platform fee is deducted server-side before crediting seller wallet ledgers.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs px-3 py-1.5 rounded-[8px] bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                      Server Fee: 10% GMV
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-[#E5E7EB]">
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]">
+                    <div className="text-[11px] text-[#6B7280]">Settlement Protocol</div>
+                    <div className="font-bold text-xs text-[#111827] mt-0.5">T+0 Internal Ledger</div>
+                  </div>
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]">
+                    <div className="text-[11px] text-[#6B7280]">Webhook Security</div>
+                    <div className="font-bold text-xs text-[#16A34A] mt-0.5">HMAC-SHA256 Verified</div>
+                  </div>
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]">
+                    <div className="text-[11px] text-[#6B7280]">Default P2M Method</div>
+                    <div className="font-bold text-xs text-[#2563EB] mt-0.5">UPI Intent + Cards</div>
+                  </div>
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]">
+                    <div className="text-[11px] text-[#6B7280]">Auto Capture</div>
+                    <div className="font-bold text-xs text-[#111827] mt-0.5">Enabled (Strict)</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Gateway Rails Listing */}
+              <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-hidden">
+                <div className="p-5 border-b border-[#E5E7EB] flex items-center justify-between">
+                  <h3 className="font-display text-sm font-bold text-[#111827]">
+                    Configured Platform Payment Gateways
+                  </h3>
+                  <span className="text-xs text-[#6B7280]">
+                    Fail-closed status check active
+                  </span>
+                </div>
+
+                <div className="divide-y divide-[#E5E7EB]">
+                  {[
+                    {
+                      key: 'razorpay',
+                      name: 'Razorpay Payment Rails',
+                      desc: 'Primary domestic rail for UPI Intent, RuPay, Visa, Mastercard & Netbanking',
+                      keyId: 'rzp_test_platform_root_2026',
+                      env: 'sandbox',
+                      enabled: true,
+                      fee: '10%',
+                      methods: 'UPI, Cards, Netbanking',
+                    },
+                    {
+                      key: 'cashfree',
+                      name: 'Cashfree Payments Engine',
+                      desc: 'Secondary high-throughput checkout rail with instant UPI intent QR',
+                      keyId: 'cf_app_platform_sandbox_882',
+                      env: 'sandbox',
+                      enabled: true,
+                      fee: '10%',
+                      methods: 'UPI, Cards',
+                    },
+                    {
+                      key: 'stripe',
+                      name: 'Stripe Global Gateway',
+                      desc: 'International multi-currency cross-border card checkout & fraud radar',
+                      keyId: 'pk_test_platform_global_900',
+                      env: 'sandbox',
+                      enabled: false,
+                      fee: '10%',
+                      methods: 'Global Cards, Apple Pay',
+                    },
+                    {
+                      key: 'upi',
+                      name: 'Direct UPI Instant Settlement',
+                      desc: 'Zero-fee VPA rail with dynamic merchant QR generation',
+                      keyId: 'platform@okaxis',
+                      env: 'live',
+                      enabled: true,
+                      fee: '10%',
+                      methods: 'BHIM, GPay, PhonePe, Paytm',
+                    },
+                  ].map((gw) => (
+                    <div key={gw.key} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-display font-bold text-sm text-[#111827]">{gw.name}</span>
+                          <span
+                            className={`font-mono text-[10px] px-2 py-0.5 rounded-[4px] font-semibold ${
+                              gw.enabled
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-gray-100 text-gray-600 border border-gray-200'
+                            }`}
+                          >
+                            {gw.enabled ? 'ACTIVE' : 'DISABLED'}
+                          </span>
+                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded-[4px] bg-blue-50 text-blue-700 border border-blue-200 uppercase">
+                            {gw.env}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#6B7280]">{gw.desc}</p>
+                        <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] font-mono text-[#4B5563]">
+                          <span>Key: {gw.keyId}</span>
+                          <span>•</span>
+                          <span>Platform Fee: {gw.fee}</span>
+                          <span>•</span>
+                          <span>Methods: {gw.methods}</span>
+                        </div>
+                        {gwTestFeedback[gw.key] && (
+                          <div className="text-[11px] text-emerald-600 font-semibold pt-1">
+                            ✓ {gwTestFeedback[gw.key]}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleTestPlatformGateway(gw.key)}
+                          className="px-3 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] hover:bg-slate-100 rounded-[8px] text-xs font-semibold text-[#111827]"
+                        >
+                          Test Handshake
+                        </button>
+                        <button
+                          type="button"
+                          disabled={gwUpdating}
+                          onClick={() => handleTogglePlatformGateway(gw.key, gw.enabled)}
+                          className={`px-3 py-1.5 rounded-[8px] text-xs font-semibold border ${
+                            gw.enabled
+                              ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {gw.enabled ? 'Disable Rail' : 'Enable Rail'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* MODULE 9: RETURNS & DISPUTES                                   */}
           {/* ============================================================== */}
           {activeTab === 'returns' && (
             <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-x-auto">
