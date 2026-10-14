@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import type { AuthRequest } from './src/middleware/auth.ts';
 
@@ -580,6 +581,358 @@ async function startServer() {
       res.json(result);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Failed to test platform payment gateway' });
+    }
+  });
+
+  // ============================================================================
+  // RBAC Roles & Permissions Governance APIs
+  // ============================================================================
+  api.get('/admin/roles', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const data = await repo.getRolesAndPermissions();
+      res.json(data);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load roles' });
+    }
+  });
+
+  api.post('/admin/roles', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const created = await repo.createRole(req.user?.uid || 'admin-console-root', req.body);
+      res.json(created);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to create role' });
+    }
+  });
+
+  api.put('/admin/roles/:roleKey', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const updated = await repo.updateRole(
+        req.user?.uid || 'admin-console-root',
+        req.params.roleKey,
+        req.body
+      );
+      res.json(updated);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to update role' });
+    }
+  });
+
+  api.post('/admin/roles/:roleKey/toggle-status', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const toggled = await repo.toggleRoleStatus(
+        req.user?.uid || 'admin-console-root',
+        req.params.roleKey
+      );
+      res.json(toggled);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to toggle role status' });
+    }
+  });
+
+  api.delete('/admin/roles/:roleKey', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const deleted = await repo.deleteRole(
+        req.user?.uid || 'admin-console-root',
+        req.params.roleKey
+      );
+      res.json(deleted);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to delete role' });
+    }
+  });
+
+  api.get('/admin/users', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const usersList = await repo.getUsersWithRoles();
+      res.json(usersList);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load platform users' });
+    }
+  });
+
+  api.post('/admin/users/:uid/assign-role', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const result = await repo.assignUserRole(
+        req.user?.uid || 'admin-console-root',
+        req.params.uid,
+        req.body.roleKey
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to assign user role' });
+    }
+  });
+
+  api.get('/admin/rbac/audit', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const logs = await repo.getRbacAuditLogs();
+      res.json(logs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load RBAC audit history' });
+    }
+  });
+
+  api.post('/admin/rbac/test-permission', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const uid = req.user?.uid || '';
+      const { moduleName, action } = req.body;
+      const authorized = await repo.checkUserPermission(uid, moduleName, action);
+      if (!authorized) {
+        return res.status(403).json({
+          authorized: false,
+          userUid: uid,
+          role: req.user?.role,
+          error: `Forbidden: User role "${req.user?.role}" does not have permission "${moduleName}:${action}". Server authorization check strictly rejected this operation.`,
+        });
+      }
+      res.json({
+        authorized: true,
+        userUid: uid,
+        role: req.user?.role,
+        moduleName,
+        action,
+        message: `Authorized: User role "${req.user?.role}" is permitted to execute "${moduleName}:${action}".`,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Permission test failed' });
+    }
+  });
+
+  // ============================================================================
+  // SEO Control Panel & Meta APIs
+  // ============================================================================
+  api.get('/seo/meta/:entityType/:entityId', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const meta = await repo.getSeoMetadata(req.params.entityType, req.params.entityId);
+      res.json(meta || {});
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load SEO metadata' });
+    }
+  });
+
+  api.put('/seo/meta', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const actorUid = req.user?.uid || 'seller-tenant';
+      const result = await repo.upsertSeoMetadata(actorUid, req.body);
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to save SEO metadata' });
+    }
+  });
+
+  api.get('/seo/health-check', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const storeSlug = String(req.query.storeSlug || 'velora');
+      const health = await repo.calculateSeoHealth(storeSlug);
+      res.json(health);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to calculate SEO health' });
+    }
+  });
+
+  // ============================================================================
+  // Ads Campaigns & Tracking APIs
+  // ============================================================================
+  api.get('/ads/campaigns', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+      const campaigns = await repo.getAdCampaigns({ storeId, sellerUid: req.user?.uid });
+      res.json(campaigns);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load ad campaigns' });
+    }
+  });
+
+  api.post('/ads/campaigns', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const created = await repo.createAdCampaign(actorUid, req.body);
+      res.json(created);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to create ad campaign' });
+    }
+  });
+
+  api.put('/ads/campaigns/:id', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const updated = await repo.updateAdCampaign(actorUid, Number(req.params.id), req.body);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to update ad campaign' });
+    }
+  });
+
+  api.post('/ads/campaigns/:id/status', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const updated = await repo.toggleAdCampaignStatus(
+        actorUid,
+        Number(req.params.id),
+        req.body.status
+      );
+      res.json(updated);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to update campaign status' });
+    }
+  });
+
+  api.delete('/ads/campaigns/:id', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const result = await repo.deleteAdCampaign(actorUid, Number(req.params.id));
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to delete ad campaign' });
+    }
+  });
+
+  api.post('/ads/track', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'browser';
+      const visitorHash = crypto
+        .createHash('sha256')
+        .update(`${clientIp}:${userAgent}`)
+        .digest('hex')
+        .slice(0, 16);
+
+      const result = await repo.trackAdEvent({
+        campaignId: Number(req.body.campaignId),
+        storeId: req.body.storeId ? Number(req.body.storeId) : undefined,
+        eventType: req.body.eventType,
+        visitorHash,
+        referrer: req.body.referrer,
+        placement: req.body.placement,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to track ad event' });
+    }
+  });
+
+  api.get('/ads/storefront-active', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+      const placement = req.query.placement ? String(req.query.placement) : undefined;
+      const ads = await repo.getActiveStorefrontAds(storeId, placement);
+      res.json(ads);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load storefront ads' });
+    }
+  });
+
+  api.get('/admin/ads/integrations', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const integrations = await repo.getAdIntegrations();
+      res.json(integrations);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load ad integrations' });
+    }
+  });
+
+  api.post('/admin/ads/integrations/:providerKey/verify', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const verified = await repo.verifyAdIntegration(
+        req.user?.uid || 'admin-console-root',
+        req.params.providerKey
+      );
+      res.json(verified);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to verify ad integration' });
+    }
+  });
+
+  // ============================================================================
+  // Real Analytics & Data Ingestion APIs
+  // ============================================================================
+  api.post('/analytics/event', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'browser';
+      const visitorId =
+        req.body.visitorId ||
+        crypto
+          .createHash('sha256')
+          .update(`${clientIp}:${userAgent}`)
+          .digest('hex')
+          .slice(0, 16);
+
+      const result = await repo.recordAnalyticsEvent({
+        ...req.body,
+        visitorId,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to record analytics event' });
+    }
+  });
+
+  api.get('/analytics/dashboard', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      let storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+
+      // Tenant isolation: if requester is a seller, lock storeId to seller's own store
+      if (req.user?.role === 'seller') {
+        const ctx = await repo.getSellerTenantContext(req.user.uid);
+        storeId = ctx.store.id;
+      }
+
+      const timeRange = (req.query.timeRange as any) || '30d';
+      const dashboard = await repo.getAnalyticsDashboard({
+        storeId,
+        sellerUid: req.user?.uid,
+        timeRange,
+      });
+      res.json(dashboard);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to load analytics dashboard' });
+    }
+  });
+
+  api.get('/analytics/export', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      let storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+
+      if (req.user?.role === 'seller') {
+        const ctx = await repo.getSellerTenantContext(req.user.uid);
+        storeId = ctx.store.id;
+      }
+
+      const rawRange = String(req.query.timeRange || '30d');
+      const validRanges = ['today', '7d', '30d', '90d', 'all'] as const;
+      const timeRange = validRanges.includes(rawRange as any) ? (rawRange as typeof validRanges[number]) : '30d';
+      const csv = await repo.exportAnalyticsCsv({ storeId, timeRange });
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="analytics_export_${timeRange}.csv"`);
+      res.send(csv);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to export analytics' });
     }
   });
 

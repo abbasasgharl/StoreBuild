@@ -1,4 +1,7 @@
-import type { Request, Response, NextFunction } from 'express';
+import type express from 'express';
+type Request = express.Request;
+type Response = express.Response;
+type NextFunction = express.NextFunction;
 import crypto from 'crypto';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { db } from '../db/index.ts';

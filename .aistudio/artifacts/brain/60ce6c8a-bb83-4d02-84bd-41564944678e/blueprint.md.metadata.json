@@ -1,0 +1,5 @@
+{
+  "summary": "Complete Architectural Blueprint and Technical Documentation for Velora Commerce, detailing the multi-tenant architecture, cryptographic session security, fail-closed RBAC, WhatsApp ordering pipeline, transparent 10% commercial fee mechanics, multi-rail payment gateways (Razorpay, Cashfree, UPI, Stripe), weekly automated settlement engine with return reserve holds, Co-Worker Agent boundaries, and complete API reference.",
+  "updatedAt": "2026-10-14T21:39:06.906225422Z",
+  "userFacing": true
+}

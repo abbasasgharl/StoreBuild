@@ -326,19 +326,113 @@ export const otpVerifications = pgTable('otp_verifications', {
 
 export const roles = pgTable('roles', {
   id: serial('id').primaryKey(),
-  roleKey: text('role_key').notNull().unique(), // 'buyer' | 'seller' | 'admin' | 'agent'
+  roleKey: text('role_key').notNull().unique(), // 'buyer' | 'seller' | 'admin' | 'agent' | custom keys
   displayName: text('display_name').notNull(),
   description: text('description').notNull(),
+  isSystemRole: boolean('is_system_role').default(false).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
   requiresTwoFactor: boolean('requires_two_factor').default(false).notNull(),
   idleTimeoutMinutes: integer('idle_timeout_minutes').default(30).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 export const permissions = pgTable('permissions', {
   id: serial('id').primaryKey(),
   roleKey: text('role_key').notNull(),
   moduleName: text('module_name').notNull(),
-  allowedActions: text('allowed_actions').notNull(), // JSON array of actions
+  allowedActions: text('allowed_actions').notNull(), // JSON array of actions: ['read', 'create', 'update', 'delete', 'publish', 'export', 'approve']
   requiresHumanApproval: boolean('requires_human_approval').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const userRoles = pgTable('user_roles', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull(),
+  userUid: text('user_uid').notNull(),
+  roleKey: text('role_key').notNull(),
+  assignedBy: text('assigned_by').default('admin-console-root'),
+  assignedAt: timestamp('assigned_at').defaultNow(),
+});
+
+export const seoMetadata = pgTable('seo_metadata', {
+  id: serial('id').primaryKey(),
+  storeId: integer('store_id'), // null for global platform
+  entityType: text('entity_type').notNull(), // 'global' | 'store' | 'product' | 'category' | 'page'
+  entityId: text('entity_id').notNull(), // store slug, product id/slug, category name, or page path
+  title: text('title').default('').notNull(),
+  description: text('description').default('').notNull(),
+  canonicalUrl: text('canonical_url').default(''),
+  keywords: text('keywords').default(''),
+  ogTitle: text('og_title').default(''),
+  ogDescription: text('og_description').default(''),
+  ogImageUrl: text('og_image_url').default(''),
+  twitterCard: text('twitter_card').default('summary_large_image'),
+  noIndex: boolean('no_index').default(false).notNull(),
+  noFollow: boolean('no_follow').default(false).notNull(),
+  structuredDataJson: text('structured_data_json').default(''),
+  sitemapPriority: text('sitemap_priority').default('0.8'),
+  sitemapChangeFreq: text('sitemap_change_freq').default('weekly'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const adCampaigns = pgTable('ad_campaigns', {
+  id: serial('id').primaryKey(),
+  storeId: integer('store_id'), // null for platform-wide ads
+  sellerUid: text('seller_uid').default(''),
+  campaignName: text('campaign_name').notNull(),
+  objective: text('objective').default('traffic').notNull(), // 'traffic' | 'sales' | 'brand_awareness'
+  status: text('status').default('active').notNull(), // 'active' | 'paused' | 'scheduled' | 'draft' | 'completed'
+  budgetDaily: integer('budget_daily').default(1000).notNull(),
+  budgetTotal: integer('budget_total').default(10000).notNull(),
+  spentTotal: integer('spent_total').default(0).notNull(),
+  startDate: timestamp('start_date').defaultNow(),
+  endDate: timestamp('end_date'),
+  isContinuous: boolean('is_continuous').default(true).notNull(),
+  headline: text('headline').default('').notNull(),
+  bodyText: text('body_text').default(''),
+  creativeImageUrl: text('creative_image_url').default(''),
+  ctaText: text('cta_text').default('Shop Now').notNull(),
+  destinationUrl: text('destination_url').default('').notNull(),
+  placement: text('placement').default('storefront_top_banner').notNull(), // 'storefront_top_banner' | 'product_sidebar' | 'category_banner'
+  targetAudience: text('target_audience').default('All Shoppers'),
+  impressionsCount: integer('impressions_count').default(0).notNull(),
+  clicksCount: integer('clicks_count').default(0).notNull(),
+  conversionsCount: integer('conversions_count').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const adEvents = pgTable('ad_events', {
+  id: serial('id').primaryKey(),
+  campaignId: integer('campaign_id').notNull(),
+  storeId: integer('store_id'),
+  eventType: text('event_type').notNull(), // 'impression' | 'click' | 'conversion'
+  visitorHash: text('visitor_hash').notNull(),
+  dedupKey: text('dedup_key').notNull(),
+  referrer: text('referrer').default(''),
+  placement: text('placement').default(''),
+  metadataJson: text('metadata_json').default('{}'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const analyticsEvents = pgTable('analytics_events', {
+  id: serial('id').primaryKey(),
+  storeId: integer('store_id'),
+  eventType: text('event_type').notNull(), // 'page_view' | 'product_view' | 'add_to_cart' | 'whatsapp_click' | 'checkout_view' | 'order_paid'
+  entityType: text('entity_type').default(''), // 'store' | 'product' | 'order' | 'cart'
+  entityId: text('entity_id').default(''),
+  orderRef: text('order_ref').default(''),
+  orderAmount: integer('order_amount').default(0),
+  visitorId: text('visitor_id').default(''),
+  sessionId: text('session_id').default(''),
+  referrer: text('referrer').default(''),
+  deviceType: text('device_type').default('desktop'),
+  pagePath: text('page_path').default(''),
+  metadataJson: text('metadata_json').default('{}'),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 export const agentActions = pgTable('agent_actions', {
