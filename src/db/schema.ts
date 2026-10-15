@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { boolean, integer, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, integer, pgTable, serial, text, timestamp, varchar } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -15,6 +15,7 @@ export const users = pgTable('users', {
   twoFactorVerified: boolean('two_factor_verified').default(true).notNull(),
   twoFactorSecret: text('two_factor_secret').default('JBSWY3DPEHPK3PXP'),
   failedLoginAttempts: integer('failed_login_attempts').default(0).notNull(),
+  lockedUntil: timestamp('locked_until'),
   lastLoginAt: timestamp('last_login_at').defaultNow(),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -486,8 +487,6 @@ export const adIntegrations = pgTable('ad_integrations', {
 
 export const paymentGateways = pgTable('payment_gateways', {
   id: serial('id').primaryKey(),
-  storeId: integer('store_id'), // null for platform-wide gateway
-  sellerUid: text('seller_uid').default(''),
   gatewayKey: text('gateway_key').notNull(), // 'razorpay' | 'cashfree' | 'stripe' | 'upi_direct' | 'paytm'
   displayName: text('display_name').notNull(),
   enabled: boolean('enabled').default(true).notNull(),
@@ -496,6 +495,9 @@ export const paymentGateways = pgTable('payment_gateways', {
   keySecret: text('key_secret').default(''),
   webhookSecret: text('webhook_secret').default(''),
   merchantId: text('merchant_id').default(''),
+  encryptedSecrets: text('encrypted_secrets'),
+  secretsIv: varchar('secrets_iv', { length: 32 }),
+  authTag: varchar('auth_tag', { length: 32 }),
   autoCapture: boolean('auto_capture').default(true).notNull(),
   enableUpi: boolean('enable_upi').default(true).notNull(),
   enableCards: boolean('enable_cards').default(true).notNull(),
@@ -505,6 +507,15 @@ export const paymentGateways = pgTable('payment_gateways', {
   webhookUrl: text('webhook_url').default('https://platform.com/api/webhooks/payment-gateway').notNull(),
   status: text('status').default('active').notNull(), // 'active' | 'test_mode' | 'disabled'
   updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const paymentWebhookLogs = pgTable('payment_webhook_logs', {
+  id: serial('id').primaryKey(),
+  providerEventId: varchar('provider_event_id', { length: 255 }).notNull().unique(),
+  provider: text('provider').notNull(),
+  eventType: text('event_type').notNull(),
+  rawPayload: text('raw_payload').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 export const auditLogs = pgTable('audit_logs', {

@@ -19,7 +19,7 @@ const WIZARD_STEPS = [
 export default function CreateStorePage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { switchDemoPersona, authFetch } = useAuth();
+  const { loginSellerWithCredentials, authFetch } = useAuth();
 
   // Onboarding Phases: 'signup_and_payment' -> 'otp_verification' -> 'guided_wizard'
   const [phase, setPhase] = useState<'signup_and_payment' | 'otp_verification' | 'guided_wizard'>(
@@ -29,7 +29,7 @@ export default function CreateStorePage() {
   // Phase 1 fields
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('Velora@2026');
+  const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
   const [mobile, setMobile] = useState('+91 ');
   const [businessName, setBusinessName] = useState('');
@@ -168,11 +168,10 @@ export default function CreateStorePage() {
       if (!res.ok) {
         throw new Error(data.error || 'OTP verification failed.');
       }
-      // Switch active auth session to the newly activated seller!
-      switchDemoPersona({
-        uid: createdUid,
-        email,
-        name: `${fullName} (${businessName})`,
+      // Authenticate with server using verified credentials
+      await loginSellerWithCredentials({
+        identifier: email,
+        password,
       });
       setPhase('guided_wizard');
     } catch (err: any) {

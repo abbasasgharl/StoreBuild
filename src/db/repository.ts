@@ -34,7 +34,7 @@ import {
   paymentGateways,
   auditLogs,
 } from './schema.ts';
-import { eq, desc, and, isNull, gte, sql } from 'drizzle-orm';
+import { eq, desc, and, or, isNull, gte, sql } from 'drizzle-orm';
 import { GENERATED_ASSETS, RESERVED_STORE_SLUGS } from '../constants/assets.ts';
 import { runBoundedAgentAnalysis, getRateLimitTelemetry } from '../lib/geminiRateLimited.ts';
 import { generateTotp, verifyTotp } from '../lib/totp.ts';
@@ -86,1356 +86,65 @@ export function calculateCommercialPricing(sellerPrice: number) {
   };
 }
 
-let seedPromise: Promise<void> | null = null;
-let isSeeded = false;
+// System Provisioning: Provision root administrator strictly from ADMIN_EMAIL / ADMIN_INITIAL_PASSWORD (Rule N014)
+export async function provisionInitialAdmin(): Promise<{ email: string; uid: string; created: boolean } | null> {
+  const adminEmail = process.env.ADMIN_EMAIL?.trim();
+  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim();
 
-export async function ensureDemoDataSeeded() {
-  if (isSeeded) return;
-  if (seedPromise) return seedPromise;
+  if (!adminEmail || !adminPassword) {
+    console.warn('[Security] Root administrator environment variables (ADMIN_EMAIL / ADMIN_INITIAL_PASSWORD) not configured. Skipping root admin initialization.');
+    return null;
+  }
 
-  seedPromise = (async () => {
-    try {
-      const existingStores = await db.select().from(stores);
-      const existingTickets = await db.select().from(supportTickets);
-      const existingSeo = await db.select().from(seoSettings);
+  const cleanEmail = adminEmail.toLowerCase();
+  const [existingAdmin] = await db
+    .select()
+    .from(users)
+    .where(
+      or(
+        sql`LOWER(${users.email}) = ${cleanEmail}`,
+        eq(users.role, 'admin')
+      )
+    )
+    .limit(1);
 
-      const defaultSellerPw = hashPassword('Velora@2026');
-      const defaultAdminPw = hashPassword('AdminGov#2026');
+  if (existingAdmin) {
+    return { email: existingAdmin.email, uid: existingAdmin.uid, created: false };
+  }
 
-      // Guarantee Admin, Agent, and Velora/Ara seller users always exist in users table
-      await db
-        .insert(users)
-        .values([
-          {
-            uid: 'admin-console-root',
-            username: 'admin_root',
-            email: 'compliance@platform.com',
-            passwordHash: defaultAdminPw.hash,
-            passwordSalt: defaultAdminPw.salt,
-            fullName: 'Platform Governance Admin',
-            mobile: '+91 98200 00001',
-            role: 'admin',
-            status: 'active',
-            twoFactorVerified: true,
-            twoFactorSecret: 'JBSWY3DPEHPK3PXP',
-          },
-          {
-            uid: 'agent-ops-copilot',
-            username: 'agent_ops_copilot',
-            email: 'agent-copilot@platform.internal',
-            passwordHash: defaultAdminPw.hash,
-            passwordSalt: defaultAdminPw.salt,
-            fullName: 'Co-Worker Operations Agent (Scoped)',
-            mobile: '',
-            role: 'agent',
-            status: 'active',
-            twoFactorVerified: true,
-          },
-          {
-            uid: 'seller-velora-uid',
-            username: 'velora_founder',
-            email: 'founder@veloraboutique.in',
-            passwordHash: defaultSellerPw.hash,
-            passwordSalt: defaultSellerPw.salt,
-            fullName: 'Ananya Verma',
-            mobile: '+91 98201 44910',
-            role: 'seller',
-            status: 'active',
-            twoFactorVerified: true,
-          },
-          {
-            uid: 'seller-arastudio-uid',
-            username: 'arastudio_kabir',
-            email: 'kabir@arastudio.co',
-            passwordHash: defaultSellerPw.hash,
-            passwordSalt: defaultSellerPw.salt,
-            fullName: 'Kabir Sen',
-            mobile: '+91 98330 71200',
-            role: 'seller',
-            status: 'active',
-            twoFactorVerified: true,
-          },
-        ])
-        .onConflictDoUpdate({
-          target: users.uid,
-          set: {
-            status: 'active',
-            twoFactorVerified: true,
-          },
-        });
+  const { hash, salt } = hashPassword(adminPassword);
+  const adminUid = `admin-root-${crypto.createHash('sha256').update(adminEmail).digest('hex').slice(0, 12)}`;
 
-      // Update usernames and password hashes if missing
-      await db
-        .update(users)
-        .set({
-          username: 'admin_root',
-          email: 'compliance@platform.com',
-          role: 'admin',
-          passwordHash: defaultAdminPw.hash,
-          passwordSalt: defaultAdminPw.salt,
-          twoFactorVerified: true,
-        })
-        .where(eq(users.uid, 'admin-console-root'));
+  const [newAdmin] = await db
+    .insert(users)
+    .values({
+      uid: adminUid,
+      username: cleanEmail.split('@')[0] || 'admin_root',
+      email: cleanEmail,
+      passwordHash: hash,
+      passwordSalt: salt,
+      fullName: 'Platform Governance Administrator',
+      role: 'admin',
+      status: 'active',
+      twoFactorVerified: true,
+      failedLoginAttempts: 0,
+    })
+    .returning();
 
-      await db
-        .update(users)
-        .set({
-          username: 'velora_founder',
-          passwordHash: defaultSellerPw.hash,
-          passwordSalt: defaultSellerPw.salt,
-        })
-        .where(eq(users.uid, 'seller-velora-uid'));
+  await db.insert(auditLogs).values({
+    actorUid: newAdmin.uid,
+    actorRole: 'admin',
+    actionType: 'root_admin_provisioned',
+    targetEntity: 'user',
+    targetRef: cleanEmail,
+    details: 'Initial platform root administrator provisioned strictly from ADMIN_EMAIL / ADMIN_INITIAL_PASSWORD environment variables.',
+  });
 
-      await db
-        .update(users)
-        .set({
-          username: 'arastudio_kabir',
-          passwordHash: defaultSellerPw.hash,
-          passwordSalt: defaultSellerPw.salt,
-        })
-        .where(eq(users.uid, 'seller-arastudio-uid'));
-
-      // Guarantee Platform-level payment gateways exist
-      const existingPlatformGateways = await db
-        .select()
-        .from(paymentGateways)
-        .where(isNull(paymentGateways.storeId));
-      if (existingPlatformGateways.length === 0) {
-        await db.insert(paymentGateways).values([
-          {
-            storeId: null,
-            sellerUid: '',
-            gatewayKey: 'razorpay',
-            displayName: 'Razorpay (Cards, UPI, Netbanking, Wallets)',
-            enabled: true,
-            environment: 'sandbox',
-            keyId: 'rzp_test_9k8aP2Q9xL40aB',
-            keySecret: 'sec_test_99kLaP29xLoQ188A',
-            webhookSecret: 'whsec_rzp_990142_prod_sec',
-            merchantId: 'rzp_acc_velora_platform',
-            autoCapture: true,
-            enableUpi: true,
-            enableCards: true,
-            enableNetbanking: true,
-            enableCod: true,
-            platformFeePercent: 10,
-            webhookUrl: 'https://platform.com/api/webhooks/payment-gateway',
-            status: 'active',
-          },
-          {
-            storeId: null,
-            sellerUid: '',
-            gatewayKey: 'cashfree',
-            displayName: 'Cashfree Payments (Instant T+0 Payouts & Split)',
-            enabled: true,
-            environment: 'sandbox',
-            keyId: 'cf_app_291048_test',
-            keySecret: 'cf_sec_991024_live_8910',
-            webhookSecret: 'whsec_cf_09214_sec_key',
-            merchantId: 'cf_mch_platform_route',
-            autoCapture: true,
-            enableUpi: true,
-            enableCards: true,
-            enableNetbanking: true,
-            enableCod: false,
-            platformFeePercent: 10,
-            webhookUrl: 'https://platform.com/api/webhooks/payment-gateway',
-            status: 'active',
-          },
-          {
-            storeId: null,
-            sellerUid: '',
-            gatewayKey: 'upi_direct',
-            displayName: 'UPI Direct (BHIM, PhonePe, GPay Zero-Fee QR)',
-            enabled: true,
-            environment: 'live',
-            keyId: 'UPI-VPA-MERCHANT-8491',
-            keySecret: 'vpa_sec_hash_9941',
-            webhookSecret: 'whsec_upi_88192',
-            merchantId: 'platform.pay@okaxis',
-            autoCapture: true,
-            enableUpi: true,
-            enableCards: false,
-            enableNetbanking: false,
-            enableCod: false,
-            platformFeePercent: 0,
-            webhookUrl: 'https://platform.com/api/webhooks/payment-gateway',
-            status: 'active',
-          },
-          {
-            storeId: null,
-            sellerUid: '',
-            gatewayKey: 'stripe',
-            displayName: 'Stripe Payments (Global & Cross-Border Cards)',
-            enabled: false,
-            environment: 'sandbox',
-            keyId: 'pk_test_51Mz98LQaX9801KlpQ',
-            keySecret: 'sk_test_51Mz98LQaX9801KlpQ_sec',
-            webhookSecret: 'whsec_stripe_881920_sec',
-            merchantId: 'acct_1Mz98LQaX9801KlpQ',
-            autoCapture: true,
-            enableUpi: false,
-            enableCards: true,
-            enableNetbanking: false,
-            enableCod: false,
-            platformFeePercent: 10,
-            webhookUrl: 'https://platform.com/api/webhooks/payment-gateway',
-            status: 'test_mode',
-          },
-        ]);
-      }
-
-      if (existingStores.length > 0 && existingTickets.length > 0 && existingSeo.length > 0) {
-        isSeeded = true;
-        return;
-      }
-
-      if (existingStores.length === 0) {
-        // 1. Seed Primary Demo Seller: Velora Atelier
-        const veloraUid = 'seller-velora-uid';
-        const [veloraUser] = await db
-          .insert(users)
-          .values({
-            uid: veloraUid,
-            username: 'velora_founder',
-            email: 'founder@veloraboutique.in',
-            passwordHash: defaultSellerPw.hash,
-            passwordSalt: defaultSellerPw.salt,
-            fullName: 'Ananya Verma',
-            mobile: '+91 98201 44910',
-            role: 'seller',
-            status: 'active',
-            twoFactorVerified: true,
-          })
-          .onConflictDoUpdate({
-            target: users.uid,
-            set: {
-              username: 'velora_founder',
-              passwordHash: defaultSellerPw.hash,
-              passwordSalt: defaultSellerPw.salt,
-            },
-          })
-          .returning();
-
-        await db
-          .insert(sellerProfiles)
-          .values({
-            userId: veloraUser.id,
-            uid: veloraUid,
-            businessName: 'Velora Atelier Pvt Ltd',
-            setupPlan: 'Growth Annual',
-            setupFeeAmount: 1999,
-            setupFeePaid: true,
-            setupPaymentRef: 'PAY-SETUP-88412',
-            otpVerified: true,
-            onboardingStep: 8,
-            kycStatus: 'Verified',
-          })
-          .onConflictDoUpdate({
-            target: sellerProfiles.uid,
-            set: { otpVerified: true },
-          });
-
-        const [veloraStore] = await db
-          .insert(stores)
-          .values({
-            sellerId: veloraUser.id,
-            uid: veloraUid,
-            slug: 'velora',
-            name: 'Velora Atelier',
-            tagline: 'Handcrafted Textiles, Sculptural Brass & Botanical Objects',
-            about:
-              'Founded in Jaipur and Mumbai, Velora Atelier collaborates with independent master weavers and metalworkers to craft small-batch wardrobe and living pieces.',
-            whatsappNumber: '919820144910',
-            contactEmail: 'care@veloraboutique.in',
-            contactPhone: '+91 98201 44910',
-            shippingPolicy:
-              'Orders are packed in plastic-free archival boxes and dispatched within 24–48 hours via BlueDart Air or Delhivery.',
-            returnPolicy:
-              '7-day return or size exchange on unworn items with original woven tags intact. Return shipping is arranged upon approval.',
-            returnWindowDays: 7,
-            flatShippingRate: 0,
-            freeShippingThreshold: 1500,
-            instagramUrl: 'https://instagram.com/veloraatelier',
-            websiteUrl: 'https://platform.com/velora',
-            seoTitle: 'Velora Atelier — Handcrafted Mulberry Silk, Brass & Apothecary',
-            seoDescription:
-              'Shop small-batch handwoven silk apparel, sand-cast brass lamps, saddle leather totes, and botanical serums directly from Velora Atelier.',
-            socialShareImageUrl: GENERATED_ASSETS.heroStudio,
-            isPublished: true,
-            status: 'active',
-          })
-          .onConflictDoUpdate({
-            target: stores.slug,
-            set: { isPublished: true },
-          })
-          .returning();
-
-        await db
-          .insert(storeBranding)
-          .values({
-            storeId: veloraStore.id,
-            preset: 'Luxury',
-            logoUrl: GENERATED_ASSETS.silkDress,
-            bannerUrl: GENERATED_ASSETS.heroStudio,
-            logoCropJson: '{"position":"center","zoom":1}',
-            bannerCropJson: '{"position":"center","zoom":1}',
-            primaryColor: '#2563EB',
-            secondaryColor: '#111827',
-            buttonStyle: 'rounded',
-            fontPreset: 'Manrope & Plus Jakarta Sans',
-            cardStyle: 'editorial',
-          })
-          .onConflictDoUpdate({
-            target: storeBranding.storeId,
-            set: { bannerUrl: GENERATED_ASSETS.heroStudio },
-          });
-
-        const initialProducts = [
-          {
-            title: 'Handwoven Raw Mulberry Silk Wrap Dress',
-            slug: 'raw-mulberry-silk-wrap-dress',
-            sku: 'VLR-SLK-001',
-            category: 'Apparel',
-            description:
-              'Cut from unbleached handloom mulberry silk with a relaxed kimono sleeve, adjustable waist tie, and French-seamed interior finish.',
-            sellerPrice: 4500,
-            stock: 14,
-            variantsJson: JSON.stringify(['XS / Ivory', 'S / Ivory', 'M / Ivory', 'L / Ivory']),
-            weightGrams: 380,
-            shippingNotes: 'Dispatched within 24 hours in breathable cotton garment bag',
-            returnExchangePolicy: '7-day size exchange or full refund if unworn',
-            status: 'Published',
-            primaryImageUrl: GENERATED_ASSETS.silkDress,
-            seoTitle: 'Handwoven Raw Mulberry Silk Wrap Dress | Velora Atelier',
-            seoDescription:
-              'Unbleached handloom mulberry silk wrap dress with French seams. ₹4,950 inclusive of platform protection.',
-            gallery: [
-              GENERATED_ASSETS.silkDress,
-              GENERATED_ASSETS.heroStudio,
-              GENERATED_ASSETS.leatherTote,
-              GENERATED_ASSETS.botanicalSerum,
-            ],
-          },
-          {
-            title: 'Alabaster & Brushed Brass Table Lamp',
-            slug: 'alabaster-brushed-brass-lamp',
-            sku: 'VLR-LMP-002',
-            category: 'Lighting & Living',
-            description:
-              'Hand-turned Spanish alabaster shade mounted on a solid sand-cast brushed brass stem with braided linen cord and warm LED dimmer.',
-            sellerPrice: 6800,
-            stock: 8,
-            variantsJson: JSON.stringify(['Warm Brass / 2700K', 'Antique Bronze / 2700K']),
-            weightGrams: 2400,
-            shippingNotes: 'Ships in custom foam-lined wooden crate within 48 hours',
-            returnExchangePolicy: '7-day replacement or refund for transit damage or defects',
-            status: 'Published',
-            primaryImageUrl: GENERATED_ASSETS.brassLamp,
-            seoTitle: 'Alabaster & Brushed Brass Table Lamp | Velora Atelier',
-            seoDescription:
-              'Sculptural Spanish alabaster and sand-cast brass table lamp with warm LED dimmer.',
-            gallery: [
-              GENERATED_ASSETS.brassLamp,
-              GENERATED_ASSETS.heroStudio,
-              GENERATED_ASSETS.silkDress,
-              GENERATED_ASSETS.leatherTote,
-            ],
-          },
-          {
-            title: 'Architectural Saddle Leather Everyday Tote',
-            slug: 'saddle-leather-everyday-tote',
-            sku: 'VLR-BAG-003',
-            category: 'Leather Goods',
-            description:
-              'Vegetable-tanned full-grain cognac leather tote with solid brass buckle closure, padded 14-inch laptop sleeve, and hand-burnished edges.',
-            sellerPrice: 5200,
-            stock: 19,
-            variantsJson: JSON.stringify(['Cognac Tan', 'Espresso Brown']),
-            weightGrams: 850,
-            shippingNotes: 'Includes monogrammed dust bag and leather balm',
-            returnExchangePolicy: '7-day return eligible with original dust bag',
-            status: 'Published',
-            primaryImageUrl: GENERATED_ASSETS.leatherTote,
-            seoTitle: 'Architectural Saddle Leather Everyday Tote | Velora Atelier',
-            seoDescription:
-              'Full-grain vegetable-tanned saddle leather tote with solid brass hardware.',
-            gallery: [
-              GENERATED_ASSETS.leatherTote,
-              GENERATED_ASSETS.heroStudio,
-              GENERATED_ASSETS.silkDress,
-              GENERATED_ASSETS.brassLamp,
-            ],
-          },
-          {
-            title: 'Cold-Pressed Jasmine & Rosehip Facial Serum',
-            slug: 'jasmine-rosehip-facial-serum',
-            sku: 'VLR-BOT-004',
-            category: 'Apothecary',
-            description:
-              'Small-batch botanical oil cold-pressed from wild Himalayan rosehip, sambac jasmine absolute, and golden jojoba in UV-protective amber glass.',
-            sellerPrice: 1800,
-            stock: 32,
-            variantsJson: JSON.stringify(['60ml / Amber Dropper', '30ml / Travel Size']),
-            weightGrams: 210,
-            shippingNotes: 'Ships next business day via temperature-controlled air express',
-            returnExchangePolicy: 'Unopened bottles eligible for 7-day return',
-            status: 'Published',
-            primaryImageUrl: GENERATED_ASSETS.botanicalSerum,
-            seoTitle: 'Cold-Pressed Jasmine & Rosehip Facial Serum | Velora Atelier',
-            seoDescription:
-              'Wild Himalayan rosehip and sambac jasmine botanical facial oil in UV amber glass.',
-            gallery: [
-              GENERATED_ASSETS.botanicalSerum,
-              GENERATED_ASSETS.heroStudio,
-              GENERATED_ASSETS.silkDress,
-              GENERATED_ASSETS.brassLamp,
-            ],
-          },
-        ];
-
-        const insertedProducts = [];
-        for (const prod of initialProducts) {
-          const pricing = calculateCommercialPricing(prod.sellerPrice);
-          const [inserted] = await db
-            .insert(products)
-            .values({
-              storeId: veloraStore.id,
-              sellerUid: veloraUid,
-              title: prod.title,
-              slug: prod.slug,
-              sku: prod.sku,
-              category: prod.category,
-              description: prod.description,
-              sellerPrice: pricing.sellerPrice,
-              platformFeePercent: 10,
-              customerPrice: pricing.customerPrice,
-              stock: prod.stock,
-              variantsJson: prod.variantsJson,
-              weightGrams: prod.weightGrams,
-              shippingNotes: prod.shippingNotes,
-              returnExchangePolicy: prod.returnExchangePolicy,
-              status: prod.status,
-              primaryImageUrl: prod.primaryImageUrl,
-              imageCropPosition: 'center',
-              seoTitle: prod.seoTitle,
-              seoDescription: prod.seoDescription,
-            })
-            .returning();
-
-          insertedProducts.push(inserted);
-          // Seed 4 images per product to satisfy Section 5 (minimum 4 product photos before publishing)
-          await db.insert(productImages).values(
-            prod.gallery.map((imgUrl, idx) => ({
-              productId: inserted.id,
-              storeId: veloraStore.id,
-              imageUrl: imgUrl,
-              mimeType: 'image/jpeg',
-              fileSizeBytes: 240000 + idx * 18000,
-              cropPosition: 'center',
-              altText: `${prod.title} — View ${idx + 1} (4:5 Portrait)`,
-              sortOrder: idx,
-            }))
-          );
-        }
-
-        const [veloraWallet] = await db
-          .insert(wallets)
-          .values({
-            storeId: veloraStore.id,
-            sellerUid: veloraUid,
-            availableBalance: 9700,
-            pendingBalance: 6800,
-            heldBalance: 1800,
-            paidOutBalance: 12000,
-            lifetimeEarnings: 30300,
-            isOnHold: false,
-          })
-          .returning();
-
-        await db.insert(payoutAccounts).values({
-          storeId: veloraStore.id,
-          sellerUid: veloraUid,
-          method: 'upi',
-          upiId: 'velora.atelier@okaxis',
-          accountHolderName: 'Velora Atelier Pvt Ltd',
-          bankAccountNumber: '918020049182341',
-          ifscCode: 'UTIB0000142',
-          bankName: 'Axis Bank Ltd — Fort Mumbai',
-          verificationStatus: 'Verified',
-        });
-
-        const [cust1, cust2, cust3] = await db
-          .insert(customers)
-          .values([
-            {
-              storeId: veloraStore.id,
-              fullName: 'Meera Krishnan',
-              phone: '+91 98450 11209',
-              email: 'meera.k@gmail.com',
-              addressLine: '402, Lavelle Regency, Lavelle Road',
-              city: 'Bengaluru',
-              state: 'Karnataka',
-              pincode: '560001',
-            },
-            {
-              storeId: veloraStore.id,
-              fullName: 'Rohan Singhania',
-              phone: '+91 98111 77420',
-              email: 'rohan@singhaniadesign.in',
-              addressLine: '14A, Jor Bagh, Lodhi Road',
-              city: 'New Delhi',
-              state: 'Delhi',
-              pincode: '110003',
-            },
-            {
-              storeId: veloraStore.id,
-              fullName: 'Devika Nair',
-              phone: '+91 98209 33188',
-              email: 'devika.nair@outlook.com',
-              addressLine: '19, Pali Hill, Bandra West',
-              city: 'Mumbai',
-              state: 'Maharashtra',
-              pincode: '400050',
-            },
-          ])
-          .returning();
-
-        const [order1, order2, order3, order4] = await db
-          .insert(orders)
-          .values([
-            {
-              orderRef: 'ORD-84910',
-              storeId: veloraStore.id,
-              sellerUid: veloraUid,
-              customerId: cust1.id,
-              customerName: cust1.fullName,
-              customerPhone: cust1.phone,
-              customerEmail: cust1.email,
-              shippingAddress: `${cust1.addressLine}, ${cust1.city}, ${cust1.state} - ${cust1.pincode}`,
-              sellerSubtotal: 9700,
-              platformFeeTotal: 970,
-              shippingAmount: 0,
-              customerTotalPayable: 10670,
-              orderState: 'Completed',
-              whatsappEnquiryRef: 'WA-ENQ-7710',
-              paymentLinkGenerated: true,
-              courierName: 'BlueDart Air',
-              trackingNumber: 'BD904182741IN',
-              trackingUrl: 'https://bluedart.com/track/BD904182741IN',
-            },
-            {
-              orderRef: 'ORD-84925',
-              storeId: veloraStore.id,
-              sellerUid: veloraUid,
-              customerId: cust2.id,
-              customerName: cust2.fullName,
-              customerPhone: cust2.phone,
-              customerEmail: cust2.email,
-              shippingAddress: `${cust2.addressLine}, ${cust2.city}, ${cust2.state} - ${cust2.pincode}`,
-              sellerSubtotal: 6800,
-              platformFeeTotal: 680,
-              shippingAmount: 0,
-              customerTotalPayable: 7480,
-              orderState: 'Shipped',
-              whatsappEnquiryRef: 'WA-ENQ-7749',
-              paymentLinkGenerated: true,
-              courierName: 'Delhivery Express',
-              trackingNumber: 'DLV448192019IN',
-              trackingUrl: 'https://delhivery.com/track/DLV448192019IN',
-            },
-            {
-              orderRef: 'ORD-84939',
-              storeId: veloraStore.id,
-              sellerUid: veloraUid,
-              customerId: cust3.id,
-              customerName: cust3.fullName,
-              customerPhone: cust3.phone,
-              customerEmail: cust3.email,
-              shippingAddress: `${cust3.addressLine}, ${cust3.city}, ${cust3.state} - ${cust3.pincode}`,
-              sellerSubtotal: 1800,
-              platformFeeTotal: 180,
-              shippingAmount: 0,
-              customerTotalPayable: 1980,
-              orderState: 'Return Requested',
-              whatsappEnquiryRef: 'WA-ENQ-7802',
-              paymentLinkGenerated: true,
-              courierName: 'BlueDart Air',
-              trackingNumber: 'BD904189912IN',
-              trackingUrl: 'https://bluedart.com/track/BD904189912IN',
-            },
-            {
-              orderRef: 'ORD-84952',
-              storeId: veloraStore.id,
-              sellerUid: veloraUid,
-              customerId: cust1.id,
-              customerName: 'Aarav Mehta',
-              customerPhone: '+91 98204 55190',
-              customerEmail: 'aarav.mehta@studio.in',
-              shippingAddress: '72, Koregaon Park Lane 5, Pune, Maharashtra - 411001',
-              sellerSubtotal: 4500,
-              platformFeeTotal: 450,
-              shippingAmount: 0,
-              customerTotalPayable: 4950,
-              orderState: 'Paid',
-              whatsappEnquiryRef: 'WA-ENQ-7845',
-              paymentLinkGenerated: true,
-            },
-          ])
-          .returning();
-
-        await db.insert(orderItems).values([
-          {
-            orderId: order1.id,
-            storeId: veloraStore.id,
-            productId: insertedProducts[0].id,
-            productTitleSnapshot: insertedProducts[0].title,
-            skuSnapshot: insertedProducts[0].sku,
-            selectedVariant: 'S / Ivory',
-            quantity: 1,
-            sellerPriceSnapshot: 4500,
-            platformFeeSnapshot: 450,
-            customerPriceSnapshot: 4950,
-          },
-          {
-            orderId: order1.id,
-            storeId: veloraStore.id,
-            productId: insertedProducts[2].id,
-            productTitleSnapshot: insertedProducts[2].title,
-            skuSnapshot: insertedProducts[2].sku,
-            selectedVariant: 'Cognac Tan',
-            quantity: 1,
-            sellerPriceSnapshot: 5200,
-            platformFeeSnapshot: 520,
-            customerPriceSnapshot: 5720,
-          },
-          {
-            orderId: order2.id,
-            storeId: veloraStore.id,
-            productId: insertedProducts[1].id,
-            productTitleSnapshot: insertedProducts[1].title,
-            skuSnapshot: insertedProducts[1].sku,
-            selectedVariant: 'Warm Brass / 2700K',
-            quantity: 1,
-            sellerPriceSnapshot: 6800,
-            platformFeeSnapshot: 680,
-            customerPriceSnapshot: 7480,
-          },
-          {
-            orderId: order3.id,
-            storeId: veloraStore.id,
-            productId: insertedProducts[3].id,
-            productTitleSnapshot: insertedProducts[3].title,
-            skuSnapshot: insertedProducts[3].sku,
-            selectedVariant: '60ml / Amber Dropper',
-            quantity: 1,
-            sellerPriceSnapshot: 1800,
-            platformFeeSnapshot: 180,
-            customerPriceSnapshot: 1980,
-          },
-          {
-            orderId: order4.id,
-            storeId: veloraStore.id,
-            productId: insertedProducts[0].id,
-            productTitleSnapshot: insertedProducts[0].title,
-            skuSnapshot: insertedProducts[0].sku,
-            selectedVariant: 'M / Ivory',
-            quantity: 1,
-            sellerPriceSnapshot: 4500,
-            platformFeeSnapshot: 450,
-            customerPriceSnapshot: 4950,
-          },
-        ]);
-
-        await db.insert(payments).values([
-          {
-            orderId: order1.id,
-            storeId: veloraStore.id,
-            gateway: 'Razorpay',
-            gatewayOrderId: 'order_Rzp84910Velora',
-            gatewayPaymentId: 'pay_Rzp84910Capt',
-            webhookSignature: 'sha256=9f84c201a7e9b4f10c33881a',
-            idempotencyKey: 'idem_ord_84910_webhook',
-            amountPaid: 10670,
-            status: 'captured',
-            verifiedByWebhook: true,
-            verifiedAt: new Date(Date.now() - 86400000 * 4),
-          },
-          {
-            orderId: order2.id,
-            storeId: veloraStore.id,
-            gateway: 'Razorpay',
-            gatewayOrderId: 'order_Rzp84925Velora',
-            gatewayPaymentId: 'pay_Rzp84925Capt',
-            webhookSignature: 'sha256=4a21d990b12e7782c1093ef1',
-            idempotencyKey: 'idem_ord_84925_webhook',
-            amountPaid: 7480,
-            status: 'captured',
-            verifiedByWebhook: true,
-            verifiedAt: new Date(Date.now() - 86400000 * 2),
-          },
-          {
-            orderId: order3.id,
-            storeId: veloraStore.id,
-            gateway: 'Razorpay',
-            gatewayOrderId: 'order_Rzp84939Velora',
-            gatewayPaymentId: 'pay_Rzp84939Capt',
-            webhookSignature: 'sha256=7b92c440e19a8812d0042a19',
-            idempotencyKey: 'idem_ord_84939_webhook',
-            amountPaid: 1980,
-            status: 'captured',
-            verifiedByWebhook: true,
-            verifiedAt: new Date(Date.now() - 86400000 * 1),
-          },
-          {
-            orderId: order4.id,
-            storeId: veloraStore.id,
-            gateway: 'Razorpay',
-            gatewayOrderId: 'order_Rzp84952Velora',
-            gatewayPaymentId: 'pay_Rzp84952Capt',
-            webhookSignature: 'sha256=3e19f004c81a4412e8810b55',
-            idempotencyKey: 'idem_ord_84952_webhook',
-            amountPaid: 4950,
-            status: 'captured',
-            verifiedByWebhook: true,
-            verifiedAt: new Date(Date.now() - 3600000 * 5),
-          },
-        ]);
-
-        await db.insert(returns).values({
-          returnRef: 'RET-3019',
-          orderId: order3.id,
-          orderRef: order3.orderRef,
-          storeId: veloraStore.id,
-          customerName: cust3.fullName,
-          reason:
-            'Received 30ml bottle variant instead of 60ml Amber Dropper ordered; requesting replacement exchange.',
-          resolutionType: 'exchange',
-          policyValidated: true,
-          status: 'Return Requested',
-          holdAmount: 1800,
-          sellerNotes: 'Within 7-day return window; ₹1,800 held in reserve until resolved.',
-        });
-
-        await db.insert(walletTransactions).values([
-          {
-            transactionRef: 'TXN-90011',
-            walletId: veloraWallet.id,
-            storeId: veloraStore.id,
-            orderRef: 'ORD-84801',
-            type: 'Order Credit (Settled)',
-            direction: 'credit',
-            amount: 12000,
-            balanceAfter: 12000,
-            bucketAffected: 'available',
-            description:
-              'Customer paid ₹13,200 (₹12,000 seller price + ₹1,200 platform fee). Credited after delivery.',
-          },
-          {
-            transactionRef: 'TXN-90018',
-            walletId: veloraWallet.id,
-            storeId: veloraStore.id,
-            orderRef: 'PAY-70112',
-            type: 'Weekly Payout Disbursed',
-            direction: 'debit',
-            amount: 12000,
-            balanceAfter: 0,
-            bucketAffected: 'paid_out',
-            description:
-              'Weekly batch payout settled to UPI velora.atelier@okaxis (Axis Bank ••••2341).',
-          },
-          {
-            transactionRef: 'TXN-90024',
-            walletId: veloraWallet.id,
-            storeId: veloraStore.id,
-            orderId: order1.id,
-            orderRef: order1.orderRef,
-            type: 'Order Completed Credit',
-            direction: 'credit',
-            amount: 9700,
-            balanceAfter: 9700,
-            bucketAffected: 'available',
-            description:
-              'ORD-84910 delivered & completed. Customer paid ₹10,670; ₹9,700 seller entitlement unlocked to Available.',
-          },
-          {
-            transactionRef: 'TXN-90031',
-            walletId: veloraWallet.id,
-            storeId: veloraStore.id,
-            orderId: order2.id,
-            orderRef: order2.orderRef,
-            type: 'Order Payment Captured (Pending Fulfilment)',
-            direction: 'credit',
-            amount: 6800,
-            balanceAfter: 6800,
-            bucketAffected: 'pending',
-            description:
-              'ORD-84925 paid via gateway webhook (₹7,480 total; ₹680 platform fee). Held in Pending until delivery.',
-          },
-          {
-            transactionRef: 'TXN-90039',
-            walletId: veloraWallet.id,
-            storeId: veloraStore.id,
-            orderId: order3.id,
-            orderRef: order3.orderRef,
-            type: 'Return Exposure Hold',
-            direction: 'debit',
-            amount: 1800,
-            balanceAfter: 1800,
-            bucketAffected: 'held',
-            description:
-              'RET-3019 return requested on ORD-84939. ₹1,800 moved to Held Balance pending return inspection.',
-          },
-        ]);
-
-        await db.insert(payouts).values([
-          {
-            payoutRef: 'PAY-70112',
-            storeId: veloraStore.id,
-            sellerUid: veloraUid,
-            amount: 12000,
-            destinationSummary: 'UPI • velora.atelier@okaxis (Axis Bank •••• 2341)',
-            status: 'Completed',
-            cycleLabel: 'Weekly Batch • Cycle W40',
-            processedByAdmin: 'System Weekly Reconciliation',
-          },
-        ]);
-
-        // 2. Seed Second Demo Seller for Tenant Isolation Testing: Ara Studio Ceramics
-        const araUid = 'seller-arastudio-uid';
-        const [araUser] = await db
-          .insert(users)
-          .values({
-            uid: araUid,
-            username: 'arastudio',
-            email: 'kabir@arastudio.co',
-            passwordHash: defaultSellerPw.hash,
-            passwordSalt: defaultSellerPw.salt,
-            fullName: 'Kabir Sen',
-            mobile: '+91 98301 55219',
-            role: 'seller',
-            status: 'active',
-            twoFactorVerified: true,
-          })
-          .onConflictDoUpdate({
-            target: users.uid,
-            set: { email: 'kabir@arastudio.co' },
-          })
-          .returning();
-
-        await db
-          .insert(sellerProfiles)
-          .values({
-            userId: araUser.id,
-            uid: araUid,
-            businessName: 'Ara Studio Ceramics LLP',
-            setupPlan: 'Starter Setup',
-            setupFeeAmount: 999,
-            setupFeePaid: true,
-            setupPaymentRef: 'PAY-SETUP-77319',
-            otpVerified: true,
-            onboardingStep: 8,
-            kycStatus: 'Verified',
-          })
-          .onConflictDoUpdate({
-            target: sellerProfiles.uid,
-            set: { otpVerified: true },
-          });
-
-        const [araStore] = await db
-          .insert(stores)
-          .values({
-            sellerId: araUser.id,
-            uid: araUid,
-            slug: 'arastudio',
-            name: 'Ara Studio Ceramics',
-            tagline: 'Wheel-Thrown Stoneware & Matte Glaze Tableware',
-            about: 'Small-batch architectural ceramics fired in Pondicherry.',
-            whatsappNumber: '919830155219',
-            contactEmail: 'hello@arastudio.co',
-            contactPhone: '+91 98301 55219',
-            seoTitle: 'Ara Studio Ceramics — Wheel-Thrown Stoneware Tableware',
-            seoDescription: 'Small-batch wheel-thrown stoneware and architectural ceramics fired in Pondicherry.',
-            isPublished: true,
-            status: 'active',
-          })
-          .onConflictDoUpdate({
-            target: stores.slug,
-            set: { isPublished: true },
-          })
-          .returning();
-
-        await db
-          .insert(storeBranding)
-          .values({
-            storeId: araStore.id,
-            preset: 'Minimal',
-            bannerUrl: GENERATED_ASSETS.brassLamp,
-            primaryColor: '#111827',
-            secondaryColor: '#4B5563',
-            buttonStyle: 'sharp',
-            fontPreset: 'Manrope & Plus Jakarta Sans',
-            cardStyle: 'minimal',
-          })
-          .onConflictDoUpdate({
-            target: storeBranding.storeId,
-            set: { preset: 'Minimal' },
-          });
-
-        const [araProd] = await db
-          .insert(products)
-          .values({
-            storeId: araStore.id,
-            sellerUid: araUid,
-            title: 'Raw Speckled Stoneware Pour-Over Carafe',
-            slug: 'speckled-stoneware-carafe',
-            sku: 'ARA-CRM-101',
-            category: 'Tableware',
-            description: 'Wheel-thrown iron-speckled clay carafe with satin ash glaze.',
-            sellerPrice: 2200,
-            platformFeePercent: 10,
-            customerPrice: 2420,
-            stock: 11,
-            variantsJson: JSON.stringify(['600ml / Ash White', '600ml / Basalt Black']),
-            weightGrams: 680,
-            status: 'Published',
-            primaryImageUrl: GENERATED_ASSETS.brassLamp,
-            imageCropPosition: 'center',
-            seoTitle: 'Raw Speckled Stoneware Pour-Over Carafe | Ara Studio',
-            seoDescription: 'Wheel-thrown iron-speckled stoneware carafe with satin ash glaze.',
-          })
-          .returning();
-
-        await db.insert(productImages).values([
-          {
-            productId: araProd.id,
-            storeId: araStore.id,
-            imageUrl: GENERATED_ASSETS.brassLamp,
-            mimeType: 'image/jpeg',
-            fileSizeBytes: 210000,
-            cropPosition: 'center',
-            altText: 'Stoneware Carafe Front View',
-            sortOrder: 0,
-          },
-          {
-            productId: araProd.id,
-            storeId: araStore.id,
-            imageUrl: GENERATED_ASSETS.heroStudio,
-            mimeType: 'image/jpeg',
-            fileSizeBytes: 225000,
-            cropPosition: 'center',
-            altText: 'Stoneware Carafe Studio Detail',
-            sortOrder: 1,
-          },
-          {
-            productId: araProd.id,
-            storeId: araStore.id,
-            imageUrl: GENERATED_ASSETS.leatherTote,
-            mimeType: 'image/jpeg',
-            fileSizeBytes: 240000,
-            cropPosition: 'center',
-            altText: 'Stoneware Glaze Texture',
-            sortOrder: 2,
-          },
-          {
-            productId: araProd.id,
-            storeId: araStore.id,
-            imageUrl: GENERATED_ASSETS.botanicalSerum,
-            mimeType: 'image/jpeg',
-            fileSizeBytes: 198000,
-            cropPosition: 'center',
-            altText: 'Stoneware Pour Spout Profile',
-            sortOrder: 3,
-          },
-        ]);
-
-        await db.insert(wallets).values({
-          storeId: araStore.id,
-          sellerUid: araUid,
-          availableBalance: 4400,
-          pendingBalance: 2200,
-          heldBalance: 0,
-          paidOutBalance: 2200,
-          lifetimeEarnings: 8800,
-          isOnHold: false,
-        });
-
-        await db.insert(payoutAccounts).values({
-          storeId: araStore.id,
-          sellerUid: araUid,
-          method: 'bank',
-          upiId: 'arastudio@okhdfcbank',
-          accountHolderName: 'Ara Studio Ceramics LLP',
-          bankAccountNumber: '50200049182711',
-          ifscCode: 'HDFC0000240',
-          bankName: 'HDFC Bank — Pondicherry',
-          verificationStatus: 'Verified',
-        });
-
-        // 3. Seed Admin User & Co-Worker Agent User
-        await db
-          .insert(users)
-          .values([
-            {
-              uid: 'admin-console-root',
-              username: 'admin_root',
-              email: 'compliance@platform.com',
-              passwordHash: defaultAdminPw.hash,
-              passwordSalt: defaultAdminPw.salt,
-              fullName: 'Vikramaditya Rao (Platform Admin)',
-              mobile: '+91 98200 00001',
-              role: 'admin',
-              status: 'active',
-              twoFactorVerified: true,
-              twoFactorSecret: 'JBSWY3DPEHPK3PXP',
-            },
-            {
-              uid: 'agent-ops-copilot',
-              username: 'agent_ops_copilot',
-              email: 'agent-copilot@platform.internal',
-              passwordHash: defaultAdminPw.hash,
-              passwordSalt: defaultAdminPw.salt,
-              fullName: 'Co-Worker Operations Agent (Scoped)',
-              mobile: '',
-              role: 'agent',
-              status: 'active',
-              twoFactorVerified: true,
-            },
-          ])
-          .onConflictDoNothing();
-
-        await db.insert(notifications).values([
-          {
-            storeId: veloraStore.id,
-            recipientRole: 'seller',
-            channel: 'in_app',
-            category: 'payment',
-            title: 'Payment Captured via Webhook — ORD-84952',
-            message:
-              'Razorpay webhook verified ₹4,950 payment from Aarav Mehta. ₹4,500 seller entitlement recorded; ₹450 platform fee collected.',
-          },
-          {
-            storeId: veloraStore.id,
-            recipientRole: 'seller',
-            channel: 'in_app',
-            category: 'return',
-            title: 'Return Request RET-3019 Requires Review',
-            message:
-              'Devika Nair requested an exchange on ORD-84939. ₹1,800 is held in your wallet until return approval.',
-          },
-          {
-            storeId: veloraStore.id,
-            recipientRole: 'seller',
-            channel: 'email',
-            category: 'payout',
-            title: 'Weekly Payout PAY-70112 Completed',
-            message: '₹12,000 settled to UPI velora.atelier@okaxis.',
-          },
-        ]);
-
-        await db.insert(auditLogs).values([
-          {
-            actorUid: 'system-webhook-engine',
-            actorRole: 'system',
-            storeId: veloraStore.id,
-            actionType: 'webhook_payment_verified',
-            targetEntity: 'order',
-            targetRef: 'ORD-84952',
-            details:
-              'Verified HMAC signature sha256=3e19f004c81a4412e8810b55 and idempotency key idem_ord_84952_webhook.',
-          },
-          {
-            actorUid: 'admin-console-root',
-            actorRole: 'admin',
-            storeId: veloraStore.id,
-            actionType: 'weekly_payout_batch_approved',
-            targetEntity: 'payout',
-            targetRef: 'PAY-70112',
-            details: 'Approved weekly settlement of ₹12,000 to verified UPI velora.atelier@okaxis.',
-          },
-        ]);
-      }
-
-      // Seed v2.0 Support Tickets, Roles/Permissions, Co-Worker Agent Actions, SEO Settings, and Ad Integrations if empty
-      const currentStores = await db.select().from(stores);
-      const veloraStore = currentStores.find((s) => s.slug === 'velora') || currentStores[0];
-
-      if (veloraStore && existingTickets.length === 0) {
-        const [tkt1, tkt2] = await db
-          .insert(supportTickets)
-          .values([
-            {
-              ticketRef: 'TKT-1041',
-              ticketScope: 'buyer_to_seller',
-              storeId: veloraStore.id,
-              sellerUid: veloraStore.uid,
-              requesterName: 'Rohan Singhania',
-              requesterContact: 'rohan@singhaniadesign.in · +91 98111 77420',
-              relatedRef: 'ORD-84925',
-              category: 'Shipping & Delivery',
-              priority: 'Medium',
-              subject: 'Delivery timing request for Alabaster & Brushed Brass Lamp',
-              status: 'Open',
-              assignedTo: 'Velora Support Desk',
-              attachmentName: 'delivery_gate_note.pdf (180 KB)',
-            },
-            {
-              ticketRef: 'TKT-1042',
-              ticketScope: 'seller_to_admin',
-              storeId: veloraStore.id,
-              sellerUid: veloraStore.uid,
-              requesterName: 'Ananya Verma (Velora Atelier)',
-              requesterContact: 'founder@veloraboutique.in',
-              relatedRef: 'PAY-70112',
-              category: 'Payout & Settlement',
-              priority: 'High',
-              subject: 'Requesting GST invoice statement for Cycle W40 platform fees',
-              status: 'In Progress',
-              assignedTo: 'Admin Finance & Compliance',
-              attachmentName: 'velora_gst_certificate.pdf (310 KB)',
-            },
-          ])
-          .returning();
-
-        await db.insert(supportMessages).values([
-          {
-            ticketId: tkt1.id,
-            senderRole: 'buyer',
-            senderName: 'Rohan Singhania',
-            message:
-              'Hi Velora team, could you confirm if Delhivery tracking DLV448192019IN requires a signature on delivery at Jor Bagh?',
-            isInternalNote: false,
-          },
-          {
-            ticketId: tkt2.id,
-            senderRole: 'seller',
-            senderName: 'Ananya Verma',
-            message:
-              'Hello Admin team, please share the downloadable tax breakdown for our 10% platform fee deductions in Cycle W40.',
-            isInternalNote: false,
-          },
-          {
-            ticketId: tkt2.id,
-            senderRole: 'admin',
-            senderName: 'Platform Finance Ops',
-            message:
-              'Internal Check: Verified ledger reconciliation for store #1 (PAY-70112). Statement ready.',
-            isInternalNote: true,
-          },
-        ]);
-      }
-
-      const existingRoles = await db.select().from(roles);
-      if (existingRoles.length === 0) {
-        await db.insert(roles).values([
-          {
-            roleKey: 'buyer',
-            displayName: 'Buyer / Customer',
-            description:
-              'Guest browsing, WhatsApp enquiry/order flow, checkout verification, and buyer-to-seller support tickets.',
-            requiresTwoFactor: false,
-            idleTimeoutMinutes: 60,
-          },
-          {
-            roleKey: 'seller',
-            displayName: 'Store Entrepreneur (Seller)',
-            description:
-              'Strict tenant-scoped access to own store, products (4+ photos), orders, wallet, payouts, branding, SEO, and support.',
-            requiresTwoFactor: true,
-            idleTimeoutMinutes: 30,
-          },
-          {
-            roleKey: 'admin',
-            displayName: 'Platform Governance Admin',
-            description:
-              'Separate admin portal with mandatory 2FA, short idle timeout, and RBAC across sellers, payouts, support, SEO/Ads, and audit logs.',
-            requiresTwoFactor: true,
-            idleTimeoutMinutes: 15,
-          },
-          {
-            roleKey: 'agent',
-            displayName: 'Bounded Co-Worker Agent',
-            description:
-              'Scoped named identity (agent-ops-copilot); read-only by default; human approval required for all mutations.',
-            requiresTwoFactor: true,
-            idleTimeoutMinutes: 10,
-          },
-        ]);
-
-        await db.insert(permissions).values([
-          {
-            roleKey: 'agent',
-            moduleName: 'system_health',
-            allowedActions: JSON.stringify(['read_health', 'check_rate_limits', 'verify_tenant_isolation']),
-            requiresHumanApproval: false,
-          },
-          {
-            roleKey: 'agent',
-            moduleName: 'support_tickets',
-            allowedActions: JSON.stringify(['read_tickets', 'draft_reply', 'propose_triage']),
-            requiresHumanApproval: true,
-          },
-          {
-            roleKey: 'agent',
-            moduleName: 'catalog_audit',
-            allowedActions: JSON.stringify(['verify_4_photos_rule', 'verify_4_5_ratio', 'propose_seo_copy']),
-            requiresHumanApproval: true,
-          },
-          {
-            roleKey: 'agent',
-            moduleName: 'seo_audit',
-            allowedActions: JSON.stringify(['check_canonical_urls', 'check_noindex_guards', 'propose_meta_update']),
-            requiresHumanApproval: true,
-          },
-        ]);
-      }
-
-      const existingAgentActions = await db.select().from(agentActions);
-      if (existingAgentActions.length === 0) {
-        await db.insert(agentActions).values([
-          {
-            actionRef: 'AGT-201',
-            agentIdentity: 'agent-ops-copilot',
-            moduleName: 'catalog_audit',
-            actionType: 'propose_seo_fix',
-            targetEntity: 'product',
-            targetRef: 'VLR-SLK-001',
-            summary: 'Enhance structured Product SEO description & verify 4:5 portrait gallery compliance',
-            reason:
-              'All 4 product images are ≤1 MB and 4:5 ratio compliant; enriched meta description improves Google organic snippet CTR.',
-            beforeDiff:
-              'seoDescription: "Unbleached handloom mulberry silk wrap dress with French seams."',
-            afterDiff:
-              'seoDescription: "Handwoven Raw Mulberry Silk Wrap Dress by Velora Atelier. 4:5 editorial gallery, 24h insured dispatch & verified checkout."',
-            confidenceScore: 95,
-            status: 'Pending Approval',
-          },
-          {
-            actionRef: 'AGT-202',
-            agentIdentity: 'agent-ops-copilot',
-            moduleName: 'support_tickets',
-            actionType: 'propose_ticket_reply',
-            targetEntity: 'support_ticket',
-            targetRef: 'TKT-1041',
-            summary: 'Draft buyer response for ORD-84925 with live Delhivery tracking reference',
-            reason:
-              'Matched buyer ticket TKT-1041 against order ORD-84925 (Delhivery Express DLV448192019IN).',
-            beforeDiff: 'status: "Open"\nreply: (none)',
-            afterDiff:
-              'status: "Waiting for Customer"\nreply: "Your Alabaster & Brass Lamp (ORD-84925) is in transit via Delhivery Express (DLV448192019IN) with doorstep OTP delivery."',
-            confidenceScore: 93,
-            status: 'Pending Approval',
-          },
-          {
-            actionRef: 'AGT-200',
-            agentIdentity: 'agent-ops-copilot',
-            moduleName: 'system_health',
-            actionType: 'read_diagnostic',
-            targetEntity: 'platform_cluster',
-            targetRef: 'HEALTH-CHECK-V2',
-            summary: 'Completed read-only tenant isolation, webhook idempotency & Core Web Vitals check',
-            reason: 'Scheduled diagnostic run under read-only allowlist.',
-            beforeDiff: 'LCP: 1.2s | CLS: 0.01 | Tenant Isolation: Strict',
-            afterDiff: 'No mutation required (Read-Only Diagnostic Passed)',
-            confidenceScore: 99,
-            status: 'Read-Only Completed',
-            approvedBy: 'Auto (Read-Only Allowlist)',
-          },
-        ]);
-      }
-
-      if (existingSeo.length === 0) {
-        await db.insert(seoSettings).values({
-          scopeKey: 'global',
-          siteTitle: 'Velora Commerce — Entrepreneur Store Platform (v2.0)',
-          siteDescription:
-            'Your Products. Your Brand. Your Online Store. Launch your branded storefront at platform.com/{storeSlug} with WhatsApp ordering and weekly payouts.',
-          canonicalBaseUrl: 'https://platform.com',
-          robotsTxtDirectives:
-            'User-agent: *\nAllow: /\nAllow: /velora\nAllow: /arastudio\nDisallow: /app/\nDisallow: /admin/\nDisallow: /checkout/\nDisallow: /api/',
-          sitemapEnabled: true,
-          noindexPrivatePages: true,
-          googleVerificationCode: 'google-site-verification=v2_platform_verified_8841',
-          bingVerificationCode: 'msvalidate.01=9920184BC910',
-        });
-      }
-
-      const existingAds = await db.select().from(adIntegrations);
-      if (existingAds.length === 0) {
-        await db.insert(adIntegrations).values([
-          {
-            providerKey: 'google_ads',
-            displayName: 'Google Ads & GA4 Conversion Tracking',
-            enabled: true,
-            testMode: true,
-            consentRequired: true,
-            publicAccountId: 'AW-114920841 / G-VLR88210',
-            conversionLabel: 'purchase_webhook_verified',
-            adsTxtContent: '',
-            adSlotConfigJson: JSON.stringify(['page_view', 'view_item', 'begin_whatsapp_order', 'purchase']),
-            serverSecretConfigured: true,
-            verificationStatus: 'Verified (Consent-Aware Test Mode)',
-          },
-          {
-            providerKey: 'google_adsense',
-            displayName: 'Google AdSense Publisher & ads.txt',
-            enabled: false,
-            testMode: true,
-            consentRequired: true,
-            publicAccountId: 'ca-pub-4819203918274100',
-            conversionLabel: '',
-            adsTxtContent:
-              'google.com, pub-4819203918274100, DIRECT, f08c47fec0942fa0',
-            adSlotConfigJson: JSON.stringify({
-              allowPublicLanding: true,
-              blockCheckoutAndAdmin: true,
-            }),
-            serverSecretConfigured: true,
-            verificationStatus: 'Disabled by Default (Policy Guard Active)',
-          },
-          {
-            providerKey: 'google_ad_manager',
-            displayName: 'Google Ad Manager (GAM Slot Architecture)',
-            enabled: false,
-            testMode: true,
-            consentRequired: true,
-            publicAccountId: '/22910481/platform_public_showcase',
-            conversionLabel: '',
-            adsTxtContent: '',
-            adSlotConfigJson: JSON.stringify(['slot_public_directory_top', 'slot_editorial_footer']),
-            serverSecretConfigured: true,
-            verificationStatus: 'Disabled Until Owner Configured',
-          },
-          {
-            providerKey: 'meta_ads',
-            displayName: 'Meta Pixel & Conversions API (Server-Side CAPI)',
-            enabled: true,
-            testMode: true,
-            consentRequired: true,
-            publicAccountId: 'PIXEL-884920194812',
-            conversionLabel: 'PageView, ViewContent, Lead, Purchase',
-            adsTxtContent: '',
-            adSlotConfigJson: JSON.stringify(['PageView', 'ViewContent', 'Lead', 'Purchase']),
-            serverSecretConfigured: true,
-            verificationStatus: 'Server-Side Token Protected (Test Mode)',
-          },
-        ]);
-      }
-
-
-      isSeeded = true;
-    } catch (error) {
-      console.error('Demo seed error (non-fatal):', error);
-    } finally {
-      seedPromise = null;
-    }
-  })();
-
-  return seedPromise;
+  console.log(`[Security] Initial root administrator provisioned for ${cleanEmail}`);
+  return { email: newAdmin.email, uid: newAdmin.uid, created: true };
 }
 
 export async function checkSlugAvailability(rawSlug: string) {
-  await ensureDemoDataSeeded();
   const slug = rawSlug.toLowerCase().trim().replace(/[^a-z0-9-]/g, '');
   if (!slug || slug.length < 3) {
     return {
@@ -1466,171 +175,227 @@ export async function checkSlugAvailability(rawSlug: string) {
   };
 }
 
-// Section 1 & 2: Seller Username/Email + Password Login & Password Reset
+// Section 1 & 2: Centralized Server-Authoritative Authentication & Hardened Lockout Protection (P0)
+export interface AuthCredentialsPayload {
+  identifier?: string;
+  usernameOrEmail?: string;
+  email?: string;
+  username?: string;
+  password?: string;
+  otpCode?: string;
+  twoFactorCode?: string;
+  requiredRole?: 'seller' | 'admin';
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export const GENERIC_AUTH_ERROR = "That email or password isn't right. Please try again.";
+
+export async function authenticateCredentials(payload: AuthCredentialsPayload) {
+
+  const cleanId = (
+    payload.identifier ||
+    payload.usernameOrEmail ||
+    payload.email ||
+    payload.username ||
+    ''
+  ).toLowerCase().trim();
+
+  const rawPassword = payload.password;
+
+  // Fail closed if identifier or password missing
+  if (!cleanId || !rawPassword) {
+    throw new Error(GENERIC_AUTH_ERROR);
+  }
+
+  // Look up user strictly server-side by email or username
+  const [targetUser] = await db
+    .select()
+    .from(users)
+    .where(
+      or(
+        sql`LOWER(${users.email}) = ${cleanId}`,
+        sql`LOWER(${users.username}) = ${cleanId}`
+      )
+    )
+    .limit(1);
+
+  if (!targetUser) {
+    // Constant-time generic error preventing username enumeration
+    throw new Error(GENERIC_AUTH_ERROR);
+  }
+
+  // 1. Check strict server-authoritative lockout state:
+  // If locked_until is in the future, automatically drop incoming validation actions
+  if (targetUser.lockedUntil) {
+    const lockExpiryMs = new Date(targetUser.lockedUntil).getTime();
+    if (lockExpiryMs > Date.now()) {
+      await db.insert(auditLogs).values({
+        actorUid: targetUser.uid,
+        actorRole: targetUser.role,
+        actionType: 'login_dropped_locked_account',
+        targetEntity: 'user',
+        targetRef: targetUser.email,
+        details: `Validation dropped: user context locked until ${new Date(targetUser.lockedUntil).toISOString()}.`,
+      });
+      // Generic safe output description
+      throw new Error(GENERIC_AUTH_ERROR);
+    }
+  }
+
+  // 2. Strict password evaluation
+  const isPasswordValid = verifyPassword(
+    rawPassword,
+    targetUser.passwordHash,
+    targetUser.passwordSalt
+  );
+
+  if (!isPasswordValid) {
+    // Strict server-authoritative tracking block: increment failed_login_attempts on every failed password evaluation
+    const currentAttempts = Number(targetUser.failedLoginAttempts) || 0;
+    const nextAttempts = currentAttempts + 1;
+
+    // If failed_login_attempts reaches 5, lock user context: locked_until = NOW() + INTERVAL '15 minutes'
+    if (nextAttempts >= 5) {
+      const lockUntil = new Date(Date.now() + 15 * 60 * 1000); // NOW() + INTERVAL '15 minutes'
+
+      await db
+        .update(users)
+        .set({
+          failedLoginAttempts: nextAttempts,
+          lockedUntil: lockUntil,
+        })
+        .where(eq(users.id, targetUser.id));
+
+      await db.insert(auditLogs).values({
+        actorUid: targetUser.uid,
+        actorRole: targetUser.role,
+        actionType: 'account_locked_max_failures',
+        targetEntity: 'user',
+        targetRef: targetUser.email,
+        details: `User locked out until ${lockUntil.toISOString()} after reaching ${nextAttempts} failed password evaluations.`,
+      });
+    } else {
+      await db
+        .update(users)
+        .set({
+          failedLoginAttempts: nextAttempts,
+        })
+        .where(eq(users.id, targetUser.id));
+
+      await db.insert(auditLogs).values({
+        actorUid: targetUser.uid,
+        actorRole: targetUser.role,
+        actionType: 'login_failed_password',
+        targetEntity: 'user',
+        targetRef: targetUser.email,
+        details: `Failed password validation. Failed attempt count: ${nextAttempts} of 5.`,
+      });
+    }
+
+    throw new Error(GENERIC_AUTH_ERROR);
+  }
+
+  // Role validation if required
+  if (payload.requiredRole && targetUser.role !== payload.requiredRole) {
+    throw new Error(GENERIC_AUTH_ERROR);
+  }
+
+  if (targetUser.status === 'suspended') {
+    throw new Error('Account suspended by platform compliance. Contact support.');
+  }
+
+  // 3. Successful validation: reset failed attempts & clear lockout
+  await db
+    .update(users)
+    .set({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: new Date(),
+    })
+    .where(eq(users.id, targetUser.id));
+
+  // Retrieve associated store for sellers
+  const [store] = await db
+    .select()
+    .from(stores)
+    .where(eq(stores.uid, targetUser.uid))
+    .limit(1);
+
+  // Issue high-entropy cryptographic session token (C-01)
+  const sessionToken = `sb_sess_${crypto.randomBytes(32).toString('hex')}`;
+  const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+  const sessionHours = targetUser.role === 'admin' ? 8 : 24;
+
+  await db.insert(sessions).values({
+    sessionTokenHash: tokenHash,
+    userUid: targetUser.uid,
+    role: targetUser.role,
+    ipAddress: payload.ipAddress || '127.0.0.1',
+    userAgent: payload.userAgent || 'Web Client Session',
+    expiresAt: new Date(Date.now() + sessionHours * 3600 * 1000),
+  });
+
+  await db.insert(auditLogs).values({
+    actorUid: targetUser.uid,
+    actorRole: targetUser.role,
+    storeId: store?.id || null,
+    actionType: 'auth_login_success',
+    targetEntity: 'session',
+    targetRef: targetUser.email,
+    details: `Standard username/email + password authentication succeeded for ${targetUser.email} (${targetUser.role}).`,
+  });
+
+  return {
+    uid: targetUser.uid,
+    email: targetUser.email,
+    username: targetUser.username || targetUser.email.split('@')[0],
+    displayName: targetUser.fullName
+      ? `${targetUser.fullName}${store?.name ? ` (${store.name})` : ''}`
+      : store?.name || 'User',
+    role: targetUser.role as 'seller' | 'admin' | 'buyer' | 'agent',
+    token: sessionToken,
+    storeSlug: store?.slug || '',
+  };
+}
+
 export async function authenticateSellerCredentials(payload: {
   identifier: string;
   password?: string;
   otpCode?: string;
+  ipAddress?: string;
+  userAgent?: string;
 }) {
-  await ensureDemoDataSeeded();
-  const cleanId = (payload.identifier || '').toLowerCase().trim();
-  const allUsers = await db.select().from(users);
-  const found = allUsers.find(
-    (u) =>
-      u.email.toLowerCase() === cleanId ||
-      (u.username && u.username.toLowerCase() === cleanId)
-  );
-
-  if (!found) {
-    throw new Error('Invalid credentials provided.');
-  }
-  if (found.role === 'admin') {
-    throw new Error('Administrative accounts must authenticate via the separate Admin Portal.');
-  }
-  if (found.status === 'suspended') {
-    throw new Error('Account suspended by platform compliance. Contact support.');
-  }
-
-  // Verify password using salted scrypt hash strictly
-  if (!payload.password) {
-    throw new Error('Password is required.');
-  }
-  const validHash = verifyPassword(payload.password, found.passwordHash, found.passwordSalt);
-  if (!validHash) {
-    await db
-      .update(users)
-      .set({ failedLoginAttempts: (found.failedLoginAttempts || 0) + 1 })
-      .where(eq(users.id, found.id));
-    throw new Error('Invalid credentials provided.');
-  }
-
-  await db
-    .update(users)
-    .set({ failedLoginAttempts: 0, lastLoginAt: new Date() })
-    .where(eq(users.id, found.id));
-
-  const [store] = await db.select().from(stores).where(eq(stores.uid, found.uid));
-  
-  // Issue high-entropy cryptographic server session token (C-01)
-  const sessionToken = `sb_sess_${crypto.randomBytes(32).toString('hex')}`;
-  const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
-
-  await db
-    .insert(sessions)
-    .values({
-      sessionTokenHash: tokenHash,
-      userUid: found.uid,
-      role: found.role,
-      ipAddress: '127.0.0.1',
-      userAgent: 'Seller Workspace Session',
-      expiresAt: new Date(Date.now() + 24 * 3600 * 1000), // 24 hours
-    });
-
-  await db.insert(auditLogs).values({
-    actorUid: found.uid,
-    actorRole: 'seller',
-    storeId: store?.id,
-    actionType: 'seller_login_success',
-    targetEntity: 'session',
-    targetRef: found.email,
-    details: `Authenticated seller session started for ${found.email}. Opaque session issued.`,
+  return authenticateCredentials({
+    identifier: payload.identifier,
+    password: payload.password,
+    requiredRole: 'seller',
+    ipAddress: payload.ipAddress,
+    userAgent: payload.userAgent,
   });
-
-  return {
-    uid: found.uid,
-    email: found.email,
-    username: found.username || found.email.split('@')[0],
-    displayName: `${found.fullName} (${store?.name || 'Seller'})`,
-    role: 'seller' as const,
-    token: sessionToken,
-    storeSlug: store?.slug || 'velora',
-  };
 }
 
-// Separate Admin Portal Authentication with Username + Strong Password + Mandatory 2FA (C-05)
-export async function authenticateAdminWith2FA(payload: {
-  usernameOrEmail: string;
-  password: string;
-  twoFactorCode: string;
+export async function authenticateAdminCredentials(payload: {
+  usernameOrEmail?: string;
+  identifier?: string;
+  password?: string;
+  twoFactorCode?: string;
+  ipAddress?: string;
+  userAgent?: string;
 }) {
-  await ensureDemoDataSeeded();
-  const cleanId = (payload.usernameOrEmail || '').toLowerCase().trim();
-  const allUsers = await db.select().from(users);
-  const adminUser = allUsers.find(
-    (u) =>
-      u.role === 'admin' &&
-      (u.email.toLowerCase() === cleanId || u.username.toLowerCase() === cleanId)
-  );
-
-  if (!adminUser) {
-    throw new Error('Invalid administrative credentials or unauthorized account.');
-  }
-
-  const validHash = verifyPassword(payload.password, adminUser.passwordHash, adminUser.passwordSalt);
-  if (!validHash) {
-    await db
-      .update(users)
-      .set({ failedLoginAttempts: (adminUser.failedLoginAttempts || 0) + 1 })
-      .where(eq(users.id, adminUser.id));
-    throw new Error('Invalid administrative credentials or unauthorized account.');
-  }
-
-  // RFC 6238 TOTP verification using user's Base32 secret
-  const isTotpValid = verifyTotp(adminUser.twoFactorSecret || 'JBSWY3DPEHPK3PXP', payload.twoFactorCode);
-  if (!isTotpValid) {
-    await db.insert(auditLogs).values({
-      actorUid: adminUser.uid,
-      actorRole: 'admin',
-      actionType: 'admin_2fa_failed',
-      targetEntity: 'admin_portal',
-      targetRef: adminUser.username,
-      details: 'Failed 2FA TOTP code verification attempt.',
-    });
-    throw new Error('Invalid mandatory 2FA code. Enter current 6-digit TOTP code.');
-  }
-
-  await db
-    .update(users)
-    .set({ lastLoginAt: new Date(), twoFactorVerified: true, failedLoginAttempts: 0 })
-    .where(eq(users.id, adminUser.id));
-
-  // Issue high-entropy cryptographic server session token (C-01)
-  const sessionToken = `sb_sess_${crypto.randomBytes(32).toString('hex')}`;
-  const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
-
-  await db
-    .insert(sessions)
-    .values({
-      sessionTokenHash: tokenHash,
-      userUid: adminUser.uid,
-      role: 'admin',
-      ipAddress: '127.0.0.1',
-      userAgent: 'Admin Governance Session',
-      expiresAt: new Date(Date.now() + 8 * 3600 * 1000), // 8 hours
-    });
-
-  await db.insert(auditLogs).values({
-    actorUid: adminUser.uid,
-    actorRole: 'admin',
-    actionType: 'admin_2fa_login_verified',
-    targetEntity: 'admin_portal',
-    targetRef: adminUser.username,
-    details: 'Admin authenticated via separate Admin Portal with strong password + verified TOTP 2FA.',
+  return authenticateCredentials({
+    identifier: payload.usernameOrEmail || payload.identifier,
+    password: payload.password,
+    requiredRole: 'admin',
+    ipAddress: payload.ipAddress,
+    userAgent: payload.userAgent,
   });
-
-  return {
-    uid: adminUser.uid,
-    email: adminUser.email,
-    username: adminUser.username,
-    displayName: adminUser.fullName || 'Platform Governance Admin',
-    role: 'admin' as const,
-    token: sessionToken,
-  };
 }
+
+export const authenticateAdminWith2FA = authenticateAdminCredentials;
 
 // Request Password Reset challenge (C-04)
 export async function requestPasswordReset(email: string) {
-  await ensureDemoDataSeeded();
   const cleanEmail = (email || '').toLowerCase().trim();
   const [user] = await db.select().from(users).where(eq(users.email, cleanEmail));
   
@@ -1670,7 +435,6 @@ export async function resetSellerPassword(payload: {
   otpCode: string;
   newPassword: string;
 }) {
-  await ensureDemoDataSeeded();
   const cleanEmail = (payload.email || '').toLowerCase().trim();
   if (!payload.newPassword || payload.newPassword.length < 8) {
     throw new Error('New password must be at least 8 characters long.');
@@ -1759,7 +523,6 @@ export async function registerSellerAndSendOtp(payload: {
   setupFeeAmount: number;
   whatsappNumber: string;
 }) {
-  await ensureDemoDataSeeded();
   const slugCheck = await checkSlugAvailability(payload.storeSlug);
   if (!slugCheck.available) {
     throw new Error(slugCheck.reason);
@@ -1984,7 +747,6 @@ export async function verifySellerOtp(email: string, code: string) {
 
 // Fast parallel tenant-scoped Seller Context loader
 export async function getSellerTenantContext(uid: string) {
-  await ensureDemoDataSeeded();
   let targetUid = uid;
 
   let [userRows, storeRows] = await Promise.all([
@@ -2091,7 +853,6 @@ export async function getSellerTenantContext(uid: string) {
 
 // Public Storefront Projector (H-16: Returns only published public fields, never private UIDs or credentials)
 export async function getPublicStorefrontBySlug(slug: string) {
-  await ensureDemoDataSeeded();
   const cleanSlug = slug.toLowerCase().trim();
   const storeRows = await db.select().from(stores).where(eq(stores.slug, cleanSlug));
   if (storeRows.length === 0) {
@@ -2549,7 +1310,6 @@ export async function createWhatsAppOrderEnquiry(payload: {
 
 // Dedicated Minimal Public Checkout DTO (C-09: Never expose internal IDs, phone numbers, or private details)
 export async function getOrderByRefForCheckout(orderRef: string) {
-  await ensureDemoDataSeeded();
   const [order] = await db.select().from(orders).where(eq(orders.orderRef, orderRef.trim()));
   if (!order) return null;
 
@@ -2605,7 +1365,6 @@ export async function processGatewayPaymentWebhook(payload: {
   provider?: string;
   eventPayload?: any;
 }) {
-  await ensureDemoDataSeeded();
   const event = payload.eventPayload || payload || {};
   const orderRef =
     (payload as any)?.orderRef ||
@@ -2764,7 +1523,6 @@ export async function processGatewayPaymentWebhook(payload: {
 
 // Server-Controlled Sandbox Gateway Simulator for Developer/Evaluator testing
 export async function simulateSandboxGatewayPayment(orderRef: string, simulateFailure = false) {
-  await ensureDemoDataSeeded();
   const [order] = await db.select().from(orders).where(eq(orders.orderRef, orderRef.trim()));
   if (!order) throw new Error('Order not found.');
 
@@ -3436,7 +2194,6 @@ export async function testStorePaymentGatewayConnection(uid: string, gatewayKey:
 }
 
 export async function getAdminPaymentGateways() {
-  await ensureDemoDataSeeded();
   const all = await db.select().from(paymentGateways).where(isNull(paymentGateways.storeId));
   return all;
 }
@@ -3454,7 +2211,6 @@ export async function updateAdminPaymentGateway(
     platformFeePercent?: number;
   }
 ) {
-  await ensureDemoDataSeeded();
   const [existing] = await db
     .select()
     .from(paymentGateways)
@@ -3495,7 +2251,6 @@ export async function updateAdminPaymentGateway(
 }
 
 export async function testAdminPaymentGateway(adminUid: string, gatewayKey: string) {
-  await ensureDemoDataSeeded();
   const [target] = await db
     .select()
     .from(paymentGateways)
@@ -3536,7 +2291,6 @@ export async function createBuyerSupportTicket(payload: {
   message: string;
   attachmentName?: string;
 }) {
-  await ensureDemoDataSeeded();
   const [store] = await db
     .select()
     .from(stores)
@@ -3734,7 +2488,6 @@ export async function runCoworkerAgentTask(payload: {
     );
   }
 
-  await ensureDemoDataSeeded();
   const [allStores, allTickets, allProducts, seoRows] = await Promise.all([
     db.select().from(stores),
     db.select().from(supportTickets),
@@ -3862,7 +2615,6 @@ export async function updateGlobalSeoSettings(
     bingVerificationCode: string;
   }
 ) {
-  await ensureDemoDataSeeded();
   await db
     .update(seoSettings)
     .set({
@@ -3902,7 +2654,6 @@ export async function updateAdIntegrationSettings(
     adsTxtContent?: string;
   }
 ) {
-  await ensureDemoDataSeeded();
   await db
     .update(adIntegrations)
     .set({
@@ -3934,7 +2685,6 @@ export async function updateAdIntegrationSettings(
 }
 
 export async function getDynamicRobotsTxt(): Promise<string> {
-  await ensureDemoDataSeeded();
   const [seo] = await db.select().from(seoSettings);
   const base = seo?.canonicalBaseUrl || 'https://platform.com';
   const directives =
@@ -3944,7 +2694,6 @@ export async function getDynamicRobotsTxt(): Promise<string> {
 }
 
 export async function getDynamicSitemapXml(originUrl = 'https://platform.com'): Promise<string> {
-  await ensureDemoDataSeeded();
   const [allStores, allProducts] = await Promise.all([
     db.select().from(stores),
     db.select().from(products),
@@ -3977,7 +2726,6 @@ export async function getDynamicSitemapXml(originUrl = 'https://platform.com'): 
 }
 
 export async function getDynamicAdsTxt(): Promise<string> {
-  await ensureDemoDataSeeded();
   const [adsense] = await db
     .select()
     .from(adIntegrations)
@@ -3990,7 +2738,6 @@ export async function getDynamicAdsTxt(): Promise<string> {
 
 // Fast parallel Admin Console Overview loader (All 14 Admin Modules)
 export async function getAdminConsoleOverview() {
-  await ensureDemoDataSeeded();
   const [
     allStores,
     allProfiles,
@@ -4219,7 +2966,6 @@ export async function executeAdminGovernanceAction(payload: {
 // ============================================================================
 
 export async function getRolesAndPermissions() {
-  await ensureDemoDataSeeded();
   const [allRoles, allPermissions, allUserRoles, allUsers] = await Promise.all([
     db.select().from(roles).orderBy(roles.id),
     db.select().from(permissions),
@@ -4264,7 +3010,6 @@ export async function createRole(adminUid: string, payload: {
   idleTimeoutMinutes?: number;
   permissions?: Array<{ moduleName: string; allowedActions: string[] }>;
 }) {
-  await ensureDemoDataSeeded();
   const cleanKey = payload.roleKey.toLowerCase().trim().replace(/[^a-z0-9_]/g, '');
   if (!cleanKey) throw new Error('Role key must be non-empty alphanumeric string.');
 
@@ -4312,7 +3057,6 @@ export async function updateRole(adminUid: string, roleKey: string, payload: {
   isActive?: boolean;
   permissions?: Array<{ moduleName: string; allowedActions: string[] }>;
 }) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(roles).where(eq(roles.roleKey, roleKey));
   if (!existing) throw new Error(`Role "${roleKey}" not found.`);
 
@@ -4356,7 +3100,6 @@ export async function updateRole(adminUid: string, roleKey: string, payload: {
 }
 
 export async function toggleRoleStatus(adminUid: string, roleKey: string) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(roles).where(eq(roles.roleKey, roleKey));
   if (!existing) throw new Error(`Role "${roleKey}" not found.`);
   if (existing.isSystemRole) {
@@ -4379,7 +3122,6 @@ export async function toggleRoleStatus(adminUid: string, roleKey: string) {
 }
 
 export async function deleteRole(adminUid: string, roleKey: string) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(roles).where(eq(roles.roleKey, roleKey));
   if (!existing) throw new Error(`Role "${roleKey}" not found.`);
   if (existing.isSystemRole) {
@@ -4408,7 +3150,6 @@ export async function deleteRole(adminUid: string, roleKey: string) {
 }
 
 export async function getUsersWithRoles() {
-  await ensureDemoDataSeeded();
   const [allUsers, allRoles] = await Promise.all([
     db.select().from(users).orderBy(users.id),
     db.select().from(roles),
@@ -4433,7 +3174,6 @@ export async function getUsersWithRoles() {
 }
 
 export async function assignUserRole(adminUid: string, targetUid: string, newRoleKey: string) {
-  await ensureDemoDataSeeded();
   const [targetUser] = await db.select().from(users).where(eq(users.uid, targetUid));
   if (!targetUser) throw new Error(`Target user "${targetUid}" not found.`);
 
@@ -4494,7 +3234,6 @@ export async function checkUserPermission(userUid: string, moduleName: string, a
 }
 
 export async function getRbacAuditLogs() {
-  await ensureDemoDataSeeded();
   const logs = await db.select().from(auditLogs).where(
     and(
       eq(auditLogs.targetEntity, 'role')
@@ -4515,7 +3254,6 @@ export async function getRbacAuditLogs() {
 // ============================================================================
 
 export async function getSeoMetadata(entityType: string, entityId: string, storeId?: number) {
-  await ensureDemoDataSeeded();
   const rows = await db.select().from(seoMetadata).where(
     and(
       eq(seoMetadata.entityType, entityType),
@@ -4609,7 +3347,6 @@ export async function upsertSeoMetadata(actorUid: string, payload: {
   sitemapPriority?: string;
   sitemapChangeFreq?: string;
 }) {
-  await ensureDemoDataSeeded();
   const existing = await db.select().from(seoMetadata).where(
     and(
       eq(seoMetadata.entityType, payload.entityType),
@@ -4684,7 +3421,6 @@ export async function upsertSeoMetadata(actorUid: string, payload: {
 }
 
 export async function calculateSeoHealth(storeSlug: string) {
-  await ensureDemoDataSeeded();
   const [store] = await db.select().from(stores).where(eq(stores.slug, storeSlug));
   if (!store) throw new Error('Store not found.');
 
@@ -4773,7 +3509,6 @@ export async function calculateSeoHealth(storeSlug: string) {
 // ============================================================================
 
 export async function getAdCampaigns(filter: { storeId?: number; sellerUid?: string }) {
-  await ensureDemoDataSeeded();
   if (filter.storeId) {
     return await db.select().from(adCampaigns).where(eq(adCampaigns.storeId, filter.storeId)).orderBy(desc(adCampaigns.id));
   }
@@ -4797,7 +3532,6 @@ export async function createAdCampaign(actorUid: string, payload: {
   placement: 'storefront_top_banner' | 'product_sidebar' | 'category_banner';
   targetAudience?: string;
 }) {
-  await ensureDemoDataSeeded();
   const [campaign] = await db.insert(adCampaigns).values({
     storeId: payload.storeId || null,
     sellerUid: actorUid,
@@ -4833,7 +3567,6 @@ export async function createAdCampaign(actorUid: string, payload: {
 }
 
 export async function updateAdCampaign(actorUid: string, id: number, payload: Partial<typeof adCampaigns.$inferInsert>) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(adCampaigns).where(eq(adCampaigns.id, id));
   if (!existing) throw new Error('Ad campaign not found.');
 
@@ -4856,7 +3589,6 @@ export async function updateAdCampaign(actorUid: string, id: number, payload: Pa
 }
 
 export async function toggleAdCampaignStatus(actorUid: string, id: number, nextStatus: 'active' | 'paused' | 'completed') {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(adCampaigns).where(eq(adCampaigns.id, id));
   if (!existing) throw new Error('Ad campaign not found.');
 
@@ -4879,7 +3611,6 @@ export async function toggleAdCampaignStatus(actorUid: string, id: number, nextS
 }
 
 export async function deleteAdCampaign(actorUid: string, id: number) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(adCampaigns).where(eq(adCampaigns.id, id));
   if (!existing) throw new Error('Ad campaign not found.');
 
@@ -4962,7 +3693,6 @@ export async function trackAdEvent(payload: {
 }
 
 export async function getActiveStorefrontAds(storeId?: number, placement?: string) {
-  await ensureDemoDataSeeded();
   const allActive = await db.select().from(adCampaigns).where(eq(adCampaigns.status, 'active'));
   return allActive.filter((c) => {
     const matchStore = !c.storeId || c.storeId === storeId;
@@ -4972,12 +3702,10 @@ export async function getActiveStorefrontAds(storeId?: number, placement?: strin
 }
 
 export async function getAdIntegrations() {
-  await ensureDemoDataSeeded();
   return await db.select().from(adIntegrations).orderBy(adIntegrations.id);
 }
 
 export async function verifyAdIntegration(adminUid: string, providerKey: string) {
-  await ensureDemoDataSeeded();
   const [existing] = await db.select().from(adIntegrations).where(eq(adIntegrations.providerKey, providerKey));
   if (!existing) throw new Error('Ad integration provider not found.');
 
@@ -5043,7 +3771,6 @@ export async function getAnalyticsDashboard(filter: {
   sellerUid?: string;
   timeRange?: 'today' | '7d' | '30d' | '90d' | 'all';
 }) {
-  await ensureDemoDataSeeded();
   const timeRange = filter.timeRange || '30d';
 
   let cutoffDate = new Date(0);

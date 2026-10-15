@@ -9,27 +9,26 @@ export default function LoginPage() {
     signInWithGoogle,
     loginSellerWithCredentials,
     loginAdminWith2FA,
-    switchDemoPersona,
     loading,
   } = useAuth();
   const navigate = useNavigate();
 
   const [portalMode, setPortalMode] = useState<'seller' | 'admin' | 'reset'>('seller');
 
-  // Seller Login State (Username or Email + Password + Optional OTP)
-  const [sellerIdentifier, setSellerIdentifier] = useState('velora_founder');
-  const [sellerPassword, setSellerPassword] = useState('Velora@2026');
-  const [sellerOtpCode, setSellerOtpCode] = useState('123456');
+  // Seller Login State (Username or Email + Password)
+  const [sellerIdentifier, setSellerIdentifier] = useState('');
+  const [sellerPassword, setSellerPassword] = useState('');
+  const [sellerOtpCode, setSellerOtpCode] = useState('');
 
   // Separate Admin Portal State (Username + Strong Password + Mandatory 2FA)
-  const [adminUser, setAdminUser] = useState('admin_root');
-  const [adminPassword, setAdminPassword] = useState('AdminGov#2026');
-  const [admin2faCode, setAdmin2faCode] = useState('246810');
+  const [adminUser, setAdminUser] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [admin2faCode, setAdmin2faCode] = useState('');
 
   // Password Reset Flow State
-  const [resetEmail, setResetEmail] = useState('founder@veloraboutique.in');
-  const [resetOtp, setResetOtp] = useState('123456');
-  const [newPassword, setNewPassword] = useState('Velora@2026');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetOtp, setResetOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [resetSuccess, setResetSuccess] = useState('');
 
   const [error, setError] = useState('');
@@ -217,13 +216,10 @@ export default function LoginPage() {
                     onChange={(e) => setSellerPassword(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
                   />
-                  <div className="text-[11px] text-[#6B7280] mt-1 font-mono">
-                    Demo pass: Velora@2026
-                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Security OTP (Optional 2FA)
+                    Security OTP (Optional)
                   </label>
                   <input
                     type="text"
@@ -232,7 +228,6 @@ export default function LoginPage() {
                     onChange={(e) => setSellerOtpCode(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm tracking-widest text-[#111827] focus:outline-none focus:border-[#2563EB]"
                   />
-                  <div className="text-[11px] text-[#16A34A] mt-1 font-mono">OTP: 123456</div>
                 </div>
               </div>
 
@@ -270,9 +265,6 @@ export default function LoginPage() {
                   onChange={(e) => setAdminUser(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm text-[#111827]"
                 />
-                <div className="text-[11px] text-[#6B7280] mt-1 font-mono">
-                  Default: admin_root (or compliance@platform.com)
-                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -287,9 +279,6 @@ export default function LoginPage() {
                     onChange={(e) => setAdminPassword(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm"
                   />
-                  <div className="text-[11px] text-[#6B7280] mt-1 font-mono">
-                    Demo: AdminGov#2026
-                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#111827] mb-1.5">
@@ -303,9 +292,6 @@ export default function LoginPage() {
                     onChange={(e) => setAdmin2faCode(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm tracking-widest"
                   />
-                  <div className="text-[11px] text-[#16A34A] mt-1 font-mono">
-                    2FA TOTP: 246810
-                  </div>
                 </div>
               </div>
 
@@ -375,57 +361,7 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* Instant Multi-Tenant Role Switcher */}
-          <div className="pt-4 border-t border-[#E5E7EB] space-y-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#6B7280]">
-              <ShieldCheck className="w-4 h-4 text-[#2563EB]" />
-              <span>Instant Multi-Tenant Role Evaluation</span>
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  switchDemoPersona('velora');
-                  navigate('/app/dashboard');
-                }}
-                className="w-full px-3.5 py-2.5 text-left text-xs bg-[#F8FAFC] hover:bg-slate-100 border border-[#E5E7EB] rounded-[8px] flex items-center justify-between"
-              >
-                <span>
-                  <strong className="text-[#111827]">Seller 1: Velora Atelier</strong> ·
-                  velora_founder · /velora
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-[#6B7280]" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  switchDemoPersona('arastudio');
-                  navigate('/app/dashboard');
-                }}
-                className="w-full px-3.5 py-2.5 text-left text-xs bg-[#F8FAFC] hover:bg-slate-100 border border-[#E5E7EB] rounded-[8px] flex items-center justify-between"
-              >
-                <span>
-                  <strong className="text-[#111827]">Seller 2: Ara Studio Ceramics</strong> ·
-                  arastudio_kabir · /arastudio
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-[#6B7280]" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  switchDemoPersona('admin');
-                  navigate('/admin');
-                }}
-                className="w-full px-3.5 py-2.5 text-left text-xs bg-[#F8FAFC] hover:bg-slate-100 border border-[#E5E7EB] rounded-[8px] flex items-center justify-between"
-              >
-                <span>
-                  <strong className="text-[#111827]">Platform Admin Console</strong> · 14 Modules +
-                  Co-Worker Agent
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-[#6B7280]" />
-              </button>
-            </div>
-          </div>
+
 
           <div className="text-center text-xs text-[#6B7280] pt-1">
             New entrepreneur?{' '}

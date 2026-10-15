@@ -54,10 +54,10 @@ async function startServer() {
     import('./src/db/repository.ts'),
   ]);
 
-  // Pre-warm database seed in background so first API call is fast
+  // Enforce system initialization and root admin provisioning strictly from environment variables (Rule N014)
   modulesPromise
-    .then(([, repo]) => repo.ensureDemoDataSeeded())
-    .catch((err) => console.error('Background seed prewarm error:', err));
+    .then(([, repo]) => repo.provisionInitialAdmin())
+    .catch((err) => console.error('Root admin provisioning error:', err));
 
   // Write-invalidated read cache for sub-10ms storefront/workspace/admin loads
   const readCache = new Map<string, { data: unknown; expiresAt: number }>();
@@ -140,24 +140,47 @@ async function startServer() {
     }
   });
 
-  // Specification v2.0 Section 1 & 2: Seller Username/Email + Password Login, Admin 2FA Portal Login & Password Reset
+  // Specification v2.0 Section 1 & 2: Standard Username/Email + Password Login with Strict Lockout (P0)
+  api.post('/auth/login', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const session = await repo.authenticateCredentials({
+        identifier: req.body.identifier || req.body.usernameOrEmail || req.body.email || req.body.username,
+        password: req.body.password,
+        ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || 'Web Client',
+      });
+      res.json(session);
+    } catch (error: any) {
+      res.status(401).json({ error: error.message || "That email or password isn't right. Please try again." });
+    }
+  });
+
   api.post('/auth/seller-login', async (req, res) => {
     try {
       const [, repo] = await modulesPromise;
-      const session = await repo.authenticateSellerCredentials(req.body);
+      const session = await repo.authenticateSellerCredentials({
+        ...req.body,
+        ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || 'Web Client',
+      });
       res.json(session);
     } catch (error: any) {
-      res.status(401).json({ error: error.message || 'Seller authentication failed' });
+      res.status(401).json({ error: error.message || "That email or password isn't right. Please try again." });
     }
   });
 
   api.post('/auth/admin-login', async (req, res) => {
     try {
       const [, repo] = await modulesPromise;
-      const session = await repo.authenticateAdminWith2FA(req.body);
+      const session = await repo.authenticateAdminCredentials({
+        ...req.body,
+        ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || 'Web Client',
+      });
       res.json(session);
     } catch (error: any) {
-      res.status(401).json({ error: error.message || 'Admin 2FA authentication failed' });
+      res.status(401).json({ error: error.message || "That email or password isn't right. Please try again." });
     }
   });
 

@@ -47,7 +47,7 @@ type AdminTabId =
 
 export default function AdminConsolePage() {
   const location = useLocation();
-  const { session, signOutUser, switchDemoPersona, loginAdminWith2FA, authFetch } = useAuth();
+  const { session, signOutUser, loginAdminWith2FA, authFetch } = useAuth();
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -57,9 +57,9 @@ export default function AdminConsolePage() {
   const [errorBanner, setErrorBanner] = useState('');
 
   // Admin 2FA In-Page Authentication Gate state
-  const [adminLoginUser, setAdminLoginUser] = useState('admin_root');
-  const [adminLoginPassword, setAdminLoginPassword] = useState('AdminGov#2026');
-  const [adminLogin2fa, setAdminLogin2fa] = useState('246810');
+  const [adminLoginUser, setAdminLoginUser] = useState('');
+  const [adminLoginPassword, setAdminLoginPassword] = useState('');
+  const [adminLogin2fa, setAdminLogin2fa] = useState('');
   const [adminLoggingIn, setAdminLoggingIn] = useState(false);
   const [adminLoginError, setAdminLoginError] = useState('');
 
@@ -332,20 +332,6 @@ export default function AdminConsolePage() {
     }
   };
 
-  const handleQuickAdminDemoLogin = async () => {
-    setAdminLoginError('');
-    setAdminLoggingIn(true);
-    try {
-      switchDemoPersona('admin');
-      setBanner('Authenticated as Platform Governance Admin (Root). 2FA Active.');
-      await loadAdminOverview();
-    } catch (err: any) {
-      setAdminLoginError(err.message || 'Quick login failed.');
-    } finally {
-      setAdminLoggingIn(false);
-    }
-  };
-
   const handleTogglePlatformGateway = async (gatewayKey: string, currentEnabled: boolean) => {
     setGwUpdating(true);
     try {
@@ -388,7 +374,7 @@ export default function AdminConsolePage() {
   };
 
   // Specification v2.0 Section 2: Strict fail-closed In-Page 2FA Gate
-  if (session.role !== 'admin') {
+  if (!session || session.role !== 'admin') {
     return (
       <div className="min-h-screen bg-[#0F172A] text-white flex flex-col justify-between">
         {/* Top Security Banner */}
@@ -469,7 +455,6 @@ export default function AdminConsolePage() {
                   <label className="block text-slate-300 font-semibold">
                     6-Digit 2FA Code (TOTP)
                   </label>
-                  <span className="font-mono text-[10px] text-blue-400">Demo Code: 246810</span>
                 </div>
                 <input
                   type="text"
@@ -477,7 +462,7 @@ export default function AdminConsolePage() {
                   value={adminLogin2fa}
                   onChange={(e) => setAdminLogin2fa(e.target.value)}
                   className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white font-mono tracking-widest text-center text-base focus:outline-none focus:border-blue-500"
-                  placeholder="246810"
+                  placeholder="Enter 6-digit code"
                   required
                 />
               </div>
@@ -499,17 +484,8 @@ export default function AdminConsolePage() {
             </form>
 
             <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-3">
-              <button
-                type="button"
-                onClick={handleQuickAdminDemoLogin}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 font-medium rounded-[10px] transition-colors flex items-center justify-center gap-2 text-xs"
-              >
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>One-Click Instant Demo Login (Super Admin)</span>
-              </button>
-
               <div className="text-[11px] text-slate-500 text-center">
-                Active persona: <span className="text-slate-400 font-medium">{session.displayName}</span> ({session.role}).
+                Active persona: <span className="text-slate-400 font-medium">{session?.displayName || 'Signed Out'}</span> ({session?.role || 'Guest'}).
               </div>
             </div>
           </div>
@@ -650,7 +626,7 @@ export default function AdminConsolePage() {
             </div>
             <div className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] bg-slate-100 border border-slate-200 text-[11px] font-mono">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span className="text-[#374151]">{session.displayName || 'Root Admin'}</span>
+              <span className="text-[#374151]">{session?.displayName || 'Root Admin'}</span>
               <span className="text-[#9CA3AF]">· 2FA Active</span>
             </div>
           </div>
@@ -663,16 +639,6 @@ export default function AdminConsolePage() {
               placeholder="Filter sellers, orders, SKUs..."
               className="px-3.5 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] text-xs w-44 sm:w-60"
             />
-            <button
-              type="button"
-              onClick={() => {
-                switchDemoPersona('velora');
-              }}
-              title="Switch to Velora Atelier Seller Console"
-              className="px-2.5 py-1.5 rounded-[8px] bg-slate-100 hover:bg-slate-200 text-[#374151] text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <span>Seller View</span>
-            </button>
             <button
               type="button"
               onClick={() => signOutUser()}
