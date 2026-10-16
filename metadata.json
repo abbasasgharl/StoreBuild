@@ -1,6 +1,6 @@
 {
-  "name": "Project Connect",
-  "description": "A streamlined platform for finding, managing, and collaborating on professional projects and task requirements with ease.",
+  "name": "StoreBuild",
+  "description": "Multi-tenant commerce platform for independent sellers to launch branded storefronts, accept payments, and manage orders.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

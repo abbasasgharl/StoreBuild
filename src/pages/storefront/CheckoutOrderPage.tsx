@@ -29,25 +29,12 @@ export default function CheckoutOrderPage() {
     loadOrder();
   }, [orderRef]);
 
-  const handleTriggerGatewayWebhook = async (simulateFailure = false) => {
+  const handleRefreshOrderStatus = async () => {
     setProcessingWebhook(true);
     setFeedback('');
     try {
-      const res = await fetch('/api/webhooks/payment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderRef,
-          simulateFailure,
-        }),
-      });
-      const updated = await res.json();
-      setData(updated);
-      setFeedback(
-        simulateFailure
-          ? 'Gateway webhook reported Payment Failed. Order status updated server-side.'
-          : 'Server-side gateway webhook signature verified! Order marked Paid and seller entitlement credited to wallet ledger.'
-      );
+      await loadOrder();
+      setFeedback('Order status refreshed from server.');
     } finally {
       setProcessingWebhook(false);
     }
@@ -91,7 +78,7 @@ export default function CheckoutOrderPage() {
       <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-8 text-center space-y-4">
         <h1 className="font-display text-2xl font-bold">Order Reference Not Found</h1>
         <Link
-          to="/velora"
+          to={data?.store?.slug ? `/${data.store.slug}` : '/'}
           className="px-4 py-2 bg-[#2563EB] text-white text-xs font-semibold rounded-[10px]"
         >
           Return to Storefront
@@ -107,7 +94,7 @@ export default function CheckoutOrderPage() {
     <div className="min-h-screen bg-[#F8FAFC] text-[#111827] pb-20">
       <header className="bg-white border-b border-[#E5E7EB] px-6 lg:px-12 h-16 flex items-center justify-between">
         <Link
-          to={`/${store?.slug || 'velora'}`}
+          to={store?.slug ? `/${store.slug}` : '/'}
           className="font-display text-lg font-bold text-[#111827]"
         >
           {store?.name || 'Branded Storefront'} · Platform Checkout
@@ -328,26 +315,27 @@ export default function CheckoutOrderPage() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  <button
-                    type="button"
-                    disabled={processingWebhook}
-                    onClick={() => handleTriggerGatewayWebhook(false)}
-                    className="w-full py-3.5 px-5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold rounded-[12px] transition-colors"
-                  >
-                    {processingWebhook
-                      ? 'Verifying Gateway Webhook...'
-                      : `Pay ₹${Number(order.customerTotalPayable).toLocaleString('en-IN')} (Verify Webhook)`}
-                  </button>
+                <div className="space-y-4">
+                  <div className="p-4 rounded-[12px] bg-[#F8FAFC] border border-[#E5E7EB] space-y-2 text-xs">
+                    <div className="font-semibold text-[#111827] flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-[#2563EB]" />
+                      <span>Awaiting Payment Confirmation</span>
+                    </div>
+                    <p className="text-[#6B7280] leading-relaxed">
+                      Please complete your payment of <strong className="text-[#111827]">₹{Number(order.customerTotalPayable).toLocaleString('en-IN')}</strong> via your payment link or UPI.
+                    </p>
+                    <div className="text-[11px] text-[#4B5563] pt-1 border-t border-[#E5E7EB]">
+                      Payment status is verified server-side through cryptographic webhook signature upon confirmation from the payment provider.
+                    </div>
+                  </div>
 
                   <button
                     type="button"
-                    disabled={processingWebhook}
-                    onClick={() => handleTriggerGatewayWebhook(true)}
-                    className="w-full py-2.5 px-4 bg-[#F8FAFC] hover:bg-red-50 border border-[#E5E7EB] text-[#DC2626] text-xs font-semibold rounded-[10px] transition-colors flex items-center justify-center gap-1.5"
+                    disabled={processingWebhook || loading}
+                    onClick={handleRefreshOrderStatus}
+                    className="w-full py-3 px-4 bg-[#111827] hover:bg-black text-white text-xs font-semibold rounded-[10px] transition-colors flex items-center justify-center gap-2"
                   >
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Simulate Payment Failed Exception</span>
+                    {processingWebhook ? 'Checking Status...' : 'Check Payment Status'}
                   </button>
                 </div>
               )}

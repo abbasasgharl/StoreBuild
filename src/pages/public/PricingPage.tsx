@@ -156,15 +156,15 @@ export default function PricingPage() {
           </div>
 
           <div className="lg:col-span-6 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[12px] p-6 space-y-5">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
               <span className="text-sm font-semibold text-[#111827]">
                 Test Your Product Pricing
               </span>
-              <span className="font-mono text-xs text-[#6B7280]">Server Formula: P × 1.10</span>
+              <span className="text-xs text-[#4B5563] font-medium">Customer price = product price + 10% platform fee</span>
             </div>
             <div>
               <label className="block text-xs text-[#6B7280] mb-1.5">
-                Enter Seller Price (INR)
+                Enter Seller Product Price (INR)
               </label>
               <input
                 type="number"
@@ -177,7 +177,7 @@ export default function PricingPage() {
             </div>
             <div className="space-y-2.5 text-sm border-t border-[#E5E7EB] pt-4">
               <div className="flex justify-between">
-                <span className="text-[#6B7280]">Seller Wallet Credit</span>
+                <span className="text-[#6B7280]">Seller Product Price</span>
                 <span className="font-mono font-semibold text-[#16A34A]">
                   ₹{samplePrice.toLocaleString('en-IN')}
                 </span>
@@ -189,7 +189,7 @@ export default function PricingPage() {
                 </span>
               </div>
               <div className="flex justify-between pt-2 border-t border-[#E5E7EB] font-bold text-base">
-                <span>Storefront Customer Price</span>
+                <span>Final Customer Price</span>
                 <span className="font-mono">₹{customerTotal.toLocaleString('en-IN')}</span>
               </div>
             </div>

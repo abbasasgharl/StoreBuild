@@ -10,7 +10,7 @@ export function PublicHeader() {
         to="/"
         className="font-display text-lg font-extrabold tracking-tight text-[#111827] whitespace-nowrap shrink-0"
       >
-        Velora Commerce
+        StoreBuild
       </Link>
 
       {/* Zone 2: 5 clean text navigation links */}

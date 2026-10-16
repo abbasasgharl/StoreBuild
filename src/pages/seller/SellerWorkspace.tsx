@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { SafeImage } from '../../components/SafeImage.tsx';
 import { GENERATED_ASSETS, THEME_PRESETS } from '../../constants/assets.ts';
@@ -52,6 +52,11 @@ export default function SellerWorkspace() {
   const navigate = useNavigate();
   const params = useParams<{ id?: string }>();
   const { session, authFetch } = useAuth();
+
+  // Non-negotiable N001 & Task 4: Protected views must immediately trigger a hard redirect to /login
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
 
   const [ctx, setCtx] = useState<any>(null);
   const [loading, setLoading] = useState(true);

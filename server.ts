@@ -26,6 +26,72 @@ process.on('SIGINT', () => {
 
 async function startServer() {
   const app = express();
+
+  const modulesPromise = Promise.all([
+    import('./src/middleware/auth.ts'),
+    import('./src/db/repository.ts'),
+  ]);
+
+  // Hardened Payment Webhook Route (Rules N003, N005, N008 & Task 3)
+  // Captures exact raw incoming bytes using express.raw before general JSON parsing
+  app.post('/api/webhooks/payment', express.raw({ type: '*/*' }), async (req, res) => {
+    try {
+      const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET?.trim();
+      if (!webhookSecret) {
+        console.error('[Webhook Security] RAZORPAY_WEBHOOK_SECRET is not configured on platform.');
+        return res.status(400).json({ error: 'Webhook secret configuration missing on platform.' });
+      }
+
+      const signature = (req.headers['x-razorpay-signature'] || req.headers['x-webhook-signature'] || '') as string;
+      if (!signature) {
+        return res.status(400).json({ error: 'Missing required webhook signature header.' });
+      }
+
+      const rawBuffer = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || ''));
+
+      if (rawBuffer.length === 0) {
+        return res.status(400).json({ error: 'Empty webhook payload received.' });
+      }
+
+      const computedSig = crypto.createHmac('sha256', webhookSecret).update(rawBuffer).digest('hex');
+      const cleanSig = signature.replace(/^sha256=/, '').trim();
+
+      let sigValid = false;
+      try {
+        sigValid =
+          cleanSig.length === computedSig.length &&
+          crypto.timingSafeEqual(Buffer.from(cleanSig), Buffer.from(computedSig));
+      } catch {
+        sigValid = false;
+      }
+
+      if (!sigValid) {
+        return res.status(400).json({ error: 'Unauthorized: Invalid webhook signature.' });
+      }
+
+      let parsedPayload: any;
+      try {
+        parsedPayload = JSON.parse(rawBuffer.toString('utf8'));
+      } catch {
+        return res.status(400).json({ error: 'Malformed JSON payload in webhook body.' });
+      }
+
+      const [, repo] = await modulesPromise;
+      const result = await repo.processGatewayPaymentWebhook({
+        rawBody: rawBuffer,
+        signature: cleanSig,
+        provider: (req.headers['x-payment-provider'] as string) || 'razorpay',
+        eventPayload: parsedPayload,
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Webhook processing failed' });
+    }
+  });
+
   app.use(express.json({ limit: '6mb' }));
 
   const port = Number(process.env.PORT) || 3000;
@@ -48,11 +114,6 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Entrepreneur Store Platform server listening on http://localhost:${port}`);
   });
-
-  const modulesPromise = Promise.all([
-    import('./src/middleware/auth.ts'),
-    import('./src/db/repository.ts'),
-  ]);
 
   // Enforce system initialization and root admin provisioning strictly from environment variables (Rule N014)
   modulesPromise
@@ -273,16 +334,7 @@ async function startServer() {
     }
   });
 
-  // Server-Side Gateway Payment Webhook Verification (Never trust browser-side status)
-  api.post('/webhooks/payment', async (req, res) => {
-    try {
-      const [, repo] = await modulesPromise;
-      const result = await repo.processGatewayPaymentWebhook(req.body);
-      res.json(result);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || 'Webhook verification failed' });
-    }
-  });
+
 
   // Customer Return / Exchange Request
   api.post('/checkout/:orderRef/return', async (req, res) => {
@@ -442,39 +494,7 @@ async function startServer() {
     }
   });
 
-  // Seller Payment Gateway Setup & Testing APIs
-  api.get('/seller/payment-gateways', authGuard, async (req: AuthRequest, res) => {
-    try {
-      const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
-      const gateways = await repo.getStorePaymentGateways(uid);
-      res.json(gateways);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message || 'Failed to load store payment gateways' });
-    }
-  });
 
-  api.put('/seller/payment-gateways', authGuard, async (req: AuthRequest, res) => {
-    try {
-      const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
-      const updated = await repo.updateStorePaymentGatewaySettings(uid, req.body);
-      res.json(updated);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || 'Failed to update payment gateway' });
-    }
-  });
-
-  api.post('/seller/payment-gateways/test', authGuard, async (req: AuthRequest, res) => {
-    try {
-      const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
-      const result = await repo.testStorePaymentGatewayConnection(uid, req.body.gatewayKey);
-      res.json(result);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || 'Payment gateway connection test failed' });
-    }
-  });
 
   // Admin Console APIs (Protected with fail-closed adminGuard)
   api.get('/admin/overview', adminGuard, async (_req: AuthRequest, res) => {
@@ -583,11 +603,10 @@ async function startServer() {
 
   api.put('/admin/payment-gateways', adminGuard, async (req: AuthRequest, res) => {
     try {
+      const adminUid = req.user?.uid;
+      if (!adminUid) return res.status(401).json({ error: 'Unauthorized: Missing admin identity.' });
       const [, repo] = await modulesPromise;
-      const overview = await repo.updateAdminPaymentGateway(
-        req.user?.uid || 'admin-console-root',
-        req.body
-      );
+      const overview = await repo.updateAdminPaymentGateway(adminUid, req.body);
       res.json(overview);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Failed to update platform payment gateway' });
@@ -596,11 +615,10 @@ async function startServer() {
 
   api.post('/admin/payment-gateways/test', adminGuard, async (req: AuthRequest, res) => {
     try {
+      const adminUid = req.user?.uid;
+      if (!adminUid) return res.status(401).json({ error: 'Unauthorized: Missing admin identity.' });
       const [, repo] = await modulesPromise;
-      const result = await repo.testAdminPaymentGateway(
-        req.user?.uid || 'admin-console-root',
-        req.body.gatewayKey
-      );
+      const result = await repo.testAdminPaymentGateway(adminUid, req.body.gatewayKey);
       res.json(result);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Failed to test platform payment gateway' });

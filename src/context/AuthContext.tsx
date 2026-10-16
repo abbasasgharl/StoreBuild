@@ -17,7 +17,7 @@ export interface AuthSession {
   storeId?: number;
 }
 
-interface AuthContextValue {
+export interface AuthContextValue {
   session: AuthSession | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -26,10 +26,15 @@ interface AuthContextValue {
     password?: string;
     otpCode?: string;
   }) => Promise<AuthSession>;
+  loginAdminWithCredentials: (payload: {
+    usernameOrEmail: string;
+    password: string;
+    twoFactorCode?: string;
+  }) => Promise<AuthSession>;
   loginAdminWith2FA: (payload: {
     usernameOrEmail: string;
     password: string;
-    twoFactorCode: string;
+    twoFactorCode?: string;
   }) => Promise<AuthSession>;
   signOutUser: () => Promise<void>;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
@@ -37,7 +42,7 @@ interface AuthContextValue {
 
 /**
  * Validates whether a cached session in sessionStorage is an authentic server-issued token.
- * Clean browser visits or legacy demo tokens default strictly to signed-out (null).
+ * Non-negotiable N001: Clean browser visits or legacy demo tokens default strictly to signed-out (null).
  */
 const getInitialSession = (): AuthSession | null => {
   try {
@@ -59,7 +64,7 @@ const getInitialSession = (): AuthSession | null => {
   } catch {
     // Ignore storage parse errors
   }
-  // Non-negotiable N001: Clean browser visits MUST be logged out by default
+  // Clean browser visits MUST be strictly logged out by default
   return null;
 };
 
@@ -76,7 +81,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sessionStorage.setItem('storebuild_auth_session', JSON.stringify(newSession));
       } else {
         sessionStorage.removeItem('storebuild_auth_session');
-        sessionStorage.removeItem('velora_auth_session');
       }
     } catch {
       // Ignore sessionStorage exceptions
@@ -174,10 +178,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const loginAdminWith2FA = async (payload: {
+  const loginAdminWithCredentials = async (payload: {
     usernameOrEmail: string;
     password: string;
-    twoFactorCode: string;
+    twoFactorCode?: string;
   }) => {
     setLoading(true);
     try {
@@ -188,7 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Administrative authentication failed. Check credentials and 2FA code.');
+        throw new Error(data.error || "That email or password isn't right. Please try again.");
       }
       setSession(data);
       return data as AuthSession;
@@ -196,6 +200,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     }
   };
+
+  const loginAdminWith2FA = loginAdminWithCredentials;
 
   const signOutUser = async () => {
     setLoading(true);
@@ -213,7 +219,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       try {
         sessionStorage.removeItem('storebuild_auth_session');
-        sessionStorage.removeItem('velora_auth_session');
       } catch {
         // Ignore
       }
@@ -246,6 +251,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         signInWithGoogle,
         loginSellerWithCredentials,
+        loginAdminWithCredentials,
         loginAdminWith2FA,
         signOutUser,
         authFetch,

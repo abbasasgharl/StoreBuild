@@ -118,14 +118,11 @@ export async function runDemoSeed() {
   // 2. Guarantee Platform-level payment gateways
   const existingPlatformGateways = await db
     .select()
-    .from(paymentGateways)
-    .where(isNull(paymentGateways.storeId));
+    .from(paymentGateways);
 
   if (existingPlatformGateways.length === 0) {
     await db.insert(paymentGateways).values([
       {
-        storeId: null,
-        sellerUid: '',
         gatewayKey: 'razorpay',
         displayName: 'Razorpay (Cards, UPI, Netbanking, Wallets)',
         enabled: true,
@@ -144,8 +141,6 @@ export async function runDemoSeed() {
         status: 'active',
       },
       {
-        storeId: null,
-        sellerUid: '',
         gatewayKey: 'cashfree',
         displayName: 'Cashfree Payments (Instant T+0 Payouts & Split)',
         enabled: true,
@@ -164,8 +159,6 @@ export async function runDemoSeed() {
         status: 'active',
       },
       {
-        storeId: null,
-        sellerUid: '',
         gatewayKey: 'upi_direct',
         displayName: 'UPI Direct (BHIM, PhonePe, GPay Zero-Fee QR)',
         enabled: true,
@@ -184,8 +177,6 @@ export async function runDemoSeed() {
         status: 'active',
       },
       {
-        storeId: null,
-        sellerUid: '',
         gatewayKey: 'stripe',
         displayName: 'Stripe Payments (Global & Cross-Border Cards)',
         enabled: false,

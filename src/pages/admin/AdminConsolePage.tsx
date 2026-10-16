@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
 import {
   ShieldCheck,
@@ -66,6 +66,18 @@ export default function AdminConsolePage() {
   // Payment Gateways management state
   const [gwUpdating, setGwUpdating] = useState(false);
   const [gwTestFeedback, setGwTestFeedback] = useState<Record<string, string>>({});
+  const [editingGwKey, setEditingGwKey] = useState<string | null>(null);
+  const [gwFormData, setGwFormData] = useState<{
+    keyId: string;
+    keySecret: string;
+    webhookSecret: string;
+    environment: 'sandbox' | 'live';
+  }>({
+    keyId: '',
+    keySecret: '',
+    webhookSecret: '',
+    environment: 'sandbox',
+  });
 
   // Confirmation modal state for sensitive admin actions
   const [confirmModal, setConfirmModal] = useState<{
@@ -332,22 +344,22 @@ export default function AdminConsolePage() {
     }
   };
 
-  const handleTogglePlatformGateway = async (gatewayKey: string, currentEnabled: boolean) => {
+  const handleTogglePlatformGateway = async (gw: any) => {
     setGwUpdating(true);
     try {
       const res = await authFetch('/api/admin/payment-gateways', {
         method: 'PUT',
         body: JSON.stringify({
-          gatewayKey,
-          enabled: !currentEnabled,
-          environment: 'sandbox',
-          keyId: 'pl_admin_default',
+          gatewayKey: gw.gatewayKey,
+          enabled: !gw.enabled,
+          environment: gw.environment || 'sandbox',
+          keyId: gw.keyId || '',
         }),
       });
       const updated = await res.json();
       if (!res.ok) throw new Error(updated.error || 'Failed to update gateway');
       setData(updated);
-      setBanner(`Platform gateway ${gatewayKey.toUpperCase()} status updated.`);
+      setBanner(`Platform gateway ${gw.displayName || gw.gatewayKey.toUpperCase()} status updated.`);
     } catch (err: any) {
       setErrorBanner(err.message || 'Failed to update gateway.');
     } finally {
@@ -355,8 +367,38 @@ export default function AdminConsolePage() {
     }
   };
 
+  const handleSavePlatformGateway = async (gatewayKey: string) => {
+    setGwUpdating(true);
+    try {
+      const res = await authFetch('/api/admin/payment-gateways', {
+        method: 'PUT',
+        body: JSON.stringify({
+          gatewayKey,
+          enabled: true,
+          environment: gwFormData.environment,
+          keyId: gwFormData.keyId.trim(),
+          keySecret: gwFormData.keySecret.trim(),
+          webhookSecret: gwFormData.webhookSecret.trim(),
+        }),
+      });
+      const updated = await res.json();
+      if (!res.ok) throw new Error(updated.error || 'Failed to save gateway credentials');
+      setData(updated);
+      setEditingGwKey(null);
+      setBanner(`Credentials for ${gatewayKey.toUpperCase()} encrypted with AES-256-GCM and saved.`);
+    } catch (err: any) {
+      setErrorBanner(err.message || 'Failed to save gateway credentials.');
+    } finally {
+      setGwUpdating(false);
+    }
+  };
+
   const handleTestPlatformGateway = async (gatewayKey: string) => {
     try {
+      setGwTestFeedback((prev) => ({
+        ...prev,
+        [gatewayKey]: 'Testing remote connection...',
+      }));
       const res = await authFetch('/api/admin/payment-gateways/test', {
         method: 'POST',
         body: JSON.stringify({ gatewayKey }),
@@ -365,138 +407,21 @@ export default function AdminConsolePage() {
       if (!res.ok) throw new Error(result.error || 'Gateway test failed');
       setGwTestFeedback((prev) => ({
         ...prev,
-        [gatewayKey]: result.message || 'Signature handshake nominal.',
+        [gatewayKey]: result.message || 'Remote handshake nominal.',
       }));
-      setBanner(`Connection verified for ${gatewayKey.toUpperCase()}. Audit log recorded.`);
+      setBanner(`Remote connection verified for ${gatewayKey.toUpperCase()}. Audit log recorded.`);
     } catch (err: any) {
-      setErrorBanner(err.message || 'Connection test failed.');
+      setGwTestFeedback((prev) => ({
+        ...prev,
+        [gatewayKey]: `Error: ${err.message || 'Remote connection test failed.'}`,
+      }));
+      setErrorBanner(`Connection test failed: ${err.message}`);
     }
   };
 
-  // Specification v2.0 Section 2: Strict fail-closed In-Page 2FA Gate
+  // Non-negotiable N001 & Task 4: Protected views must immediately trigger a hard redirect to /login
   if (!session || session.role !== 'admin') {
-    return (
-      <div className="min-h-screen bg-[#0F172A] text-white flex flex-col justify-between">
-        {/* Top Security Banner */}
-        <header className="h-16 border-b border-slate-800 px-6 sm:px-12 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <ShieldCheck className="w-6 h-6 text-[#2563EB]" />
-            <span className="font-display font-bold text-base tracking-tight text-white">
-              Velora & Ara Platform Governance Portal
-            </span>
-            <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              2FA MANDATORY
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-xs">
-            <Link to="/" className="text-slate-400 hover:text-white transition-colors">
-              Platform Home
-            </Link>
-            <Link
-              to="/app/dashboard"
-              className="px-3 py-1.5 rounded-[8px] bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
-            >
-              Seller Workspace
-            </Link>
-          </div>
-        </header>
-
-        {/* 2FA Login Form Card */}
-        <main className="flex-1 flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-[20px] p-8 shadow-2xl space-y-6">
-            <div className="text-center space-y-2">
-              <div className="w-12 h-12 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto text-[#2563EB]">
-                <Lock className="w-6 h-6 text-[#3B82F6]" />
-              </div>
-              <h1 className="font-display text-xl font-bold text-white">
-                Admin Governance 2FA Gateway
-              </h1>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Multi-Factor TOTP (RFC 6238) authentication is required to access risk management, financial rails, and platform audits.
-              </p>
-            </div>
-
-            {adminLoginError && (
-              <div className="p-3.5 rounded-[10px] bg-red-950/60 border border-red-800/80 text-xs text-red-200 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                <span>{adminLoginError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleAdminLoginFormSubmit} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Administrator Username / Email
-                </label>
-                <input
-                  type="text"
-                  value={adminLoginUser}
-                  onChange={(e) => setAdminLoginUser(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white focus:outline-none focus:border-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Root Admin Password
-                </label>
-                <input
-                  type="password"
-                  value={adminLoginPassword}
-                  onChange={(e) => setAdminLoginPassword(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white focus:outline-none focus:border-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-slate-300 font-semibold">
-                    6-Digit 2FA Code (TOTP)
-                  </label>
-                </div>
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={adminLogin2fa}
-                  onChange={(e) => setAdminLogin2fa(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-[10px] text-white font-mono tracking-widest text-center text-base focus:outline-none focus:border-blue-500"
-                  placeholder="Enter 6-digit code"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={adminLoggingIn}
-                className="w-full py-3 bg-[#2563EB] hover:bg-blue-600 font-semibold text-white rounded-[10px] transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
-              >
-                {adminLoggingIn ? (
-                  <span>Verifying TOTP Code...</span>
-                ) : (
-                  <>
-                    <KeyRound className="w-4 h-4" />
-                    <span>Verify 2FA & Access Console</span>
-                  </>
-                )}
-              </button>
-            </form>
-
-            <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-3">
-              <div className="text-[11px] text-slate-500 text-center">
-                Active persona: <span className="text-slate-400 font-medium">{session?.displayName || 'Signed Out'}</span> ({session?.role || 'Guest'}).
-              </div>
-            </div>
-          </div>
-        </main>
-
-        <footer className="h-12 border-t border-slate-800 px-6 flex items-center justify-between text-[11px] text-slate-500">
-          <span>Enterprise Zero-Trust Authentication Architecture</span>
-          <span>Fail-Closed Enforced</span>
-        </footer>
-      </div>
-    );
+    return <Navigate to="/login" replace />;
   }
 
   if (loading && !data) {
@@ -1166,101 +1091,158 @@ export default function AdminConsolePage() {
                 </div>
 
                 <div className="divide-y divide-[#E5E7EB]">
-                  {[
-                    {
-                      key: 'razorpay',
-                      name: 'Razorpay Payment Rails',
-                      desc: 'Primary domestic rail for UPI Intent, RuPay, Visa, Mastercard & Netbanking',
-                      keyId: 'rzp_test_platform_root_2026',
-                      env: 'sandbox',
-                      enabled: true,
-                      fee: '10%',
-                      methods: 'UPI, Cards, Netbanking',
-                    },
-                    {
-                      key: 'cashfree',
-                      name: 'Cashfree Payments Engine',
-                      desc: 'Secondary high-throughput checkout rail with instant UPI intent QR',
-                      keyId: 'cf_app_platform_sandbox_882',
-                      env: 'sandbox',
-                      enabled: true,
-                      fee: '10%',
-                      methods: 'UPI, Cards',
-                    },
-                    {
-                      key: 'stripe',
-                      name: 'Stripe Global Gateway',
-                      desc: 'International multi-currency cross-border card checkout & fraud radar',
-                      keyId: 'pk_test_platform_global_900',
-                      env: 'sandbox',
-                      enabled: false,
-                      fee: '10%',
-                      methods: 'Global Cards, Apple Pay',
-                    },
-                    {
-                      key: 'upi',
-                      name: 'Direct UPI Instant Settlement',
-                      desc: 'Zero-fee VPA rail with dynamic merchant QR generation',
-                      keyId: 'platform@okaxis',
-                      env: 'live',
-                      enabled: true,
-                      fee: '10%',
-                      methods: 'BHIM, GPay, PhonePe, Paytm',
-                    },
-                  ].map((gw) => (
-                    <div key={gw.key} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2.5">
-                          <span className="font-display font-bold text-sm text-[#111827]">{gw.name}</span>
-                          <span
-                            className={`font-mono text-[10px] px-2 py-0.5 rounded-[4px] font-semibold ${
+                  {(data?.paymentGateways || []).map((gw: any) => (
+                    <div key={gw.gatewayKey || gw.id} className="p-5 flex flex-col gap-4">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2.5">
+                            <span className="font-display font-bold text-sm text-[#111827]">
+                              {gw.displayName || `${gw.gatewayKey.toUpperCase()} Gateway`}
+                            </span>
+                            <span
+                              className={`font-mono text-[10px] px-2 py-0.5 rounded-[4px] font-semibold ${
+                                gw.enabled
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : 'bg-gray-100 text-gray-600 border border-gray-200'
+                              }`}
+                            >
+                              {gw.enabled ? 'ACTIVE' : 'DISABLED'}
+                            </span>
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded-[4px] bg-blue-50 text-blue-700 border border-blue-200 uppercase">
+                              {gw.environment || 'sandbox'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] font-mono text-[#4B5563]">
+                            <span>Key ID: <strong className="text-[#111827]">{gw.maskedKeyId || gw.keyId || 'Not Configured'}</strong></span>
+                            <span>•</span>
+                            <span>Key Secret: <strong className="text-[#111827]">{gw.maskedKeySecret || '•••• ••••'}</strong></span>
+                            <span>•</span>
+                            <span>Webhook Secret: <strong className="text-[#111827]">{gw.maskedWebhookSecret || '•••• ••••'}</strong></span>
+                          </div>
+                          {gwTestFeedback[gw.gatewayKey] && (
+                            <div
+                              className={`text-[11px] font-semibold pt-1 ${
+                                gwTestFeedback[gw.gatewayKey].startsWith('Error')
+                                  ? 'text-red-600'
+                                  : 'text-emerald-600'
+                              }`}
+                            >
+                              {gwTestFeedback[gw.gatewayKey].startsWith('Error') ? '✗ ' : '✓ '}
+                              {gwTestFeedback[gw.gatewayKey]}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (editingGwKey === gw.gatewayKey) {
+                                setEditingGwKey(null);
+                              } else {
+                                setEditingGwKey(gw.gatewayKey);
+                                setGwFormData({
+                                  keyId: gw.keyId || '',
+                                  keySecret: '',
+                                  webhookSecret: '',
+                                  environment: gw.environment || 'sandbox',
+                                });
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] hover:bg-slate-100 rounded-[8px] text-xs font-semibold text-[#111827]"
+                          >
+                            {editingGwKey === gw.gatewayKey ? 'Close' : 'Configure Secrets'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={gwUpdating}
+                            onClick={() => handleTestPlatformGateway(gw.gatewayKey)}
+                            className="px-3 py-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-[8px] text-xs font-semibold text-[#2563EB]"
+                          >
+                            Test Handshake
+                          </button>
+                          <button
+                            type="button"
+                            disabled={gwUpdating}
+                            onClick={() => handleTogglePlatformGateway(gw)}
+                            className={`px-3 py-1.5 rounded-[8px] text-xs font-semibold border ${
                               gw.enabled
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-gray-100 text-gray-600 border border-gray-200'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                             }`}
                           >
-                            {gw.enabled ? 'ACTIVE' : 'DISABLED'}
-                          </span>
-                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded-[4px] bg-blue-50 text-blue-700 border border-blue-200 uppercase">
-                            {gw.env}
-                          </span>
+                            {gw.enabled ? 'Disable Rail' : 'Enable Rail'}
+                          </button>
                         </div>
-                        <p className="text-xs text-[#6B7280]">{gw.desc}</p>
-                        <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] font-mono text-[#4B5563]">
-                          <span>Key: {gw.keyId}</span>
-                          <span>•</span>
-                          <span>Platform Fee: {gw.fee}</span>
-                          <span>•</span>
-                          <span>Methods: {gw.methods}</span>
-                        </div>
-                        {gwTestFeedback[gw.key] && (
-                          <div className="text-[11px] text-emerald-600 font-semibold pt-1">
-                            ✓ {gwTestFeedback[gw.key]}
-                          </div>
-                        )}
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleTestPlatformGateway(gw.key)}
-                          className="px-3 py-1.5 bg-[#F8FAFC] border border-[#E5E7EB] hover:bg-slate-100 rounded-[8px] text-xs font-semibold text-[#111827]"
-                        >
-                          Test Handshake
-                        </button>
-                        <button
-                          type="button"
-                          disabled={gwUpdating}
-                          onClick={() => handleTogglePlatformGateway(gw.key, gw.enabled)}
-                          className={`px-3 py-1.5 rounded-[8px] text-xs font-semibold border ${
-                            gw.enabled
-                              ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                          }`}
-                        >
-                          {gw.enabled ? 'Disable Rail' : 'Enable Rail'}
-                        </button>
-                      </div>
+                      {editingGwKey === gw.gatewayKey && (
+                        <div className="p-4 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] space-y-3 mt-1">
+                          <div className="font-semibold text-xs text-[#111827]">
+                            Configure {gw.displayName} Credentials (Encrypted via AES-256-GCM)
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                            <div>
+                              <label className="block text-[#6B7280] mb-1">Key ID / App ID</label>
+                              <input
+                                type="text"
+                                value={gwFormData.keyId}
+                                onChange={(e) => setGwFormData({ ...gwFormData, keyId: e.target.value })}
+                                placeholder="rzp_test_..."
+                                className="w-full px-3 py-2 bg-white border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[#6B7280] mb-1">Environment</label>
+                              <select
+                                value={gwFormData.environment}
+                                onChange={(e) => setGwFormData({ ...gwFormData, environment: e.target.value as any })}
+                                className="w-full px-3 py-2 bg-white border border-[#E5E7EB] rounded-[8px] text-xs"
+                              >
+                                <option value="sandbox">Sandbox / Test Mode</option>
+                                <option value="live">Production / Live Mode</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[#6B7280] mb-1">Key Secret (Encrypted)</label>
+                              <input
+                                type="password"
+                                value={gwFormData.keySecret}
+                                onChange={(e) => setGwFormData({ ...gwFormData, keySecret: e.target.value })}
+                                placeholder="Enter new secret or leave blank to keep unchanged"
+                                className="w-full px-3 py-2 bg-white border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[#6B7280] mb-1">Webhook Secret (HMAC SHA-256)</label>
+                              <input
+                                type="password"
+                                value={gwFormData.webhookSecret}
+                                onChange={(e) => setGwFormData({ ...gwFormData, webhookSecret: e.target.value })}
+                                placeholder="Enter webhook secret or leave blank to keep unchanged"
+                                className="w-full px-3 py-2 bg-white border border-[#E5E7EB] rounded-[8px] font-mono text-xs"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingGwKey(null)}
+                              className="px-3 py-1.5 rounded-[8px] text-xs font-semibold bg-white border border-[#E5E7EB] hover:bg-slate-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={gwUpdating}
+                              onClick={() => handleSavePlatformGateway(gw.gatewayKey)}
+                              className="px-4 py-1.5 rounded-[8px] text-xs font-semibold bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
+                            >
+                              {gwUpdating ? 'Saving...' : 'Save & Encrypt Keys'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
