@@ -130,7 +130,17 @@ export default function SellerWorkspace() {
   const [bankAccountNumber, setBankAccountNumber] = useState('');
   const [ifscCode, setIfscCode] = useState('');
   const [bankName, setBankName] = useState('');
-  const [reauthOtpCode, setReauthOtpCode] = useState('123456');
+  const [reauthOtpCode, setReauthOtpCode] = useState(''); // Non-negotiable N002: Blank until manually entered
+
+  // Account -> Change Password state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [pwSubmitting, setPwSubmitting] = useState(false);
+  const [pwSuccessMsg, setPwSuccessMsg] = useState('');
+  const [pwErrorMsg, setPwErrorMsg] = useState('');
 
   // Support Ticketing state (Section 8: Buyer->Seller & Seller->Admin)
   const [supportTab, setSupportTab] = useState<'buyer_tickets' | 'admin_tickets'>('buyer_tickets');
@@ -490,6 +500,47 @@ export default function SellerWorkspace() {
       );
     } catch (err: any) {
       setErrorMsg(err.message);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwErrorMsg('');
+    setPwSuccessMsg('');
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPwErrorMsg('Please fill in your current password, new password, and confirmation.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwErrorMsg('New password and confirmation do not match.');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPwErrorMsg('New password must be at least 8 characters long.');
+      return;
+    }
+    setPwSubmitting(true);
+    try {
+      const res = await authFetch('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+          confirmPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Password update failed.');
+      }
+      setPwSuccessMsg(data.message || 'Your password has been updated successfully. Other active sessions were revoked.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setPwErrorMsg(err.message || 'Failed to update password.');
+    } finally {
+      setPwSubmitting(false);
     }
   };
 
@@ -2467,6 +2518,7 @@ export default function SellerWorkspace() {
           {/* VIEW 9: STORE SETTINGS (/app/settings)                         */}
           {/* ============================================================== */}
           {pathname === '/app/settings' && (
+            <>
             <form
               onSubmit={handleSaveBrandingOrSettings}
               className="bg-white border border-[#E5E7EB] rounded-[12px] p-6 sm:p-8 space-y-6 max-w-3xl text-xs"
@@ -2594,6 +2646,96 @@ export default function SellerWorkspace() {
                 </button>
               </div>
             </form>
+
+            {/* Account Security & Password Change */}
+            <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-6 sm:p-8 space-y-5 text-xs max-w-3xl mt-6">
+              <div>
+                <h2 className="font-display text-lg font-bold text-[#111827]">
+                  Account Security & Password
+                </h2>
+                <p className="text-[#6B7280]">
+                  Update your account password. Updating your password will automatically revoke all other active sessions across devices.
+                </p>
+              </div>
+
+              {pwSuccessMsg && (
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-[8px] text-[#16A34A] font-medium">
+                  {pwSuccessMsg}
+                </div>
+              )}
+              {pwErrorMsg && (
+                <div className="p-3.5 bg-red-50 border border-red-200 rounded-[8px] text-[#DC2626] font-medium">
+                  {pwErrorMsg}
+                </div>
+              )}
+
+              <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
+                <div>
+                  <label className="block font-semibold mb-1">Current Password</label>
+                  <div className="relative">
+                    <input
+                      type={showCurrentPassword ? 'text' : 'password'}
+                      required
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="Enter your existing password"
+                      className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] pr-16"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280] hover:text-[#111827]"
+                    >
+                      {showCurrentPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1">New Password</label>
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px] pr-16"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280] hover:text-[#111827]"
+                    >
+                      {showNewPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1">Confirm New Password</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter new password"
+                    className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[8px]"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={pwSubmitting}
+                  className="px-5 py-2.5 bg-[#111827] hover:bg-[#1F2937] disabled:opacity-50 text-white font-semibold rounded-[8px] transition-colors"
+                >
+                  {pwSubmitting ? 'Updating Password...' : 'Update Password'}
+                </button>
+              </form>
+            </div>
+            </>
           )}
 
           {/* ============================================================== */}

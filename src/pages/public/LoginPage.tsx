@@ -8,7 +8,7 @@ export default function LoginPage() {
   const {
     signInWithGoogle,
     loginSellerWithCredentials,
-    loginAdminWith2FA,
+    loginAdminWithCredentials,
     loading,
   } = useAuth();
   const navigate = useNavigate();
@@ -18,12 +18,10 @@ export default function LoginPage() {
   // Seller Login State (Username or Email + Password)
   const [sellerIdentifier, setSellerIdentifier] = useState('');
   const [sellerPassword, setSellerPassword] = useState('');
-  const [sellerOtpCode, setSellerOtpCode] = useState('');
 
-  // Separate Admin Portal State (Username + Strong Password + Mandatory 2FA)
+  // Admin Portal State (Username or Email + Password)
   const [adminUser, setAdminUser] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
-  const [admin2faCode, setAdmin2faCode] = useState('');
 
   // Password Reset Flow State
   const [resetEmail, setResetEmail] = useState('');
@@ -41,7 +39,7 @@ export default function LoginPage() {
     } catch (err: any) {
       setError(
         err?.message ||
-          'Google Sign-In popup could not complete in this preview window. Use Seller Credentials or Instant Role Access below.'
+          'Google Sign-In could not complete. Please enter your email and password below.'
       );
     }
   };
@@ -53,11 +51,10 @@ export default function LoginPage() {
       await loginSellerWithCredentials({
         identifier: sellerIdentifier,
         password: sellerPassword,
-        otpCode: sellerOtpCode,
       });
       navigate('/app/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Invalid seller credentials.');
+      setError(err.message || "That email or password isn't right. Please try again.");
     }
   };
 
@@ -65,14 +62,13 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     try {
-      await loginAdminWith2FA({
+      await loginAdminWithCredentials({
         usernameOrEmail: adminUser,
         password: adminPassword,
-        twoFactorCode: admin2faCode,
       });
       navigate('/admin');
     } catch (err: any) {
-      setError(err.message || 'Admin 2FA authentication failed.');
+      setError(err.message || "That email or password isn't right. Please try again.");
     }
   };
 
@@ -92,7 +88,7 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Password reset failed');
-      setResetSuccess(data.message || 'Password updated and hashed with salted scrypt.');
+      setResetSuccess(data.message || 'Password successfully updated.');
     } catch (err: any) {
       setError(err.message || 'Could not reset password.');
     }
@@ -132,7 +128,7 @@ export default function LoginPage() {
                   : 'text-[#6B7280] hover:text-[#111827]'
               }`}
             >
-              Admin Portal (2FA)
+              Admin Portal
             </button>
             <button
               type="button"
@@ -152,22 +148,22 @@ export default function LoginPage() {
 
           <div className="space-y-1.5">
             <div className="text-xs font-semibold text-[#2563EB]">
-              {portalMode === 'seller' && 'Specification v2.0 · Seller Authentication'}
-              {portalMode === 'admin' && 'Specification v2.0 · Separate Admin Portal (RBAC + 2FA)'}
-              {portalMode === 'reset' && 'Specification v2.0 · Salted Scrypt Password Reset'}
+              {portalMode === 'seller' && 'Seller Account Access'}
+              {portalMode === 'admin' && 'Platform Governance'}
+              {portalMode === 'reset' && 'Account Recovery'}
             </div>
             <h1 className="font-display text-2xl font-bold text-[#111827]">
-              {portalMode === 'seller' && 'Sign in to Your Seller Console'}
-              {portalMode === 'admin' && 'Admin Governance Portal Login'}
-              {portalMode === 'reset' && 'Reset Seller Account Password'}
+              {portalMode === 'seller' && 'Sign in to Your Store'}
+              {portalMode === 'admin' && 'Admin Governance Console'}
+              {portalMode === 'reset' && 'Reset Account Password'}
             </h1>
             <p className="text-xs text-[#6B7280]">
               {portalMode === 'seller' &&
-                'Authenticate with Username or Email + Password (or Google OAuth). Passwords are verified against salted scrypt hashes.'}
+                'Log in with your username or email address and password to manage your storefront.'}
               {portalMode === 'admin' &&
-                'Admin access requires a separate Admin username, strong password, and mandatory 6-digit 2FA verification code.'}
+                'Authorized platform administrators can sign in using their admin credentials.'}
               {portalMode === 'reset' &&
-                'Verify your registered email OTP to set a new password and revoke prior active sessions.'}
+                'Enter your registered email address and verification code to set a new password.'}
             </p>
           </div>
 
@@ -189,7 +185,7 @@ export default function LoginPage() {
             <form onSubmit={handleSellerSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                  Seller Username or Email *
+                  Email or Username *
                 </label>
                 <input
                   type="text"
@@ -197,38 +193,22 @@ export default function LoginPage() {
                   value={sellerIdentifier}
                   onChange={(e) => setSellerIdentifier(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
-                  placeholder="velora_founder or founder@veloraboutique.in"
+                  placeholder="Enter your email or username"
                 />
-                <div className="text-[11px] text-[#6B7280] mt-1 font-mono">
-                  Demo usernames: velora_founder · arastudio_kabir
-                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Password *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    value={sellerPassword}
-                    onChange={(e) => setSellerPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Security OTP (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    value={sellerOtpCode}
-                    onChange={(e) => setSellerOtpCode(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm tracking-widest text-[#111827] focus:outline-none focus:border-[#2563EB]"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#111827] mb-1.5">
+                  Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={sellerPassword}
+                  onChange={(e) => setSellerPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
+                  placeholder="Enter your password"
+                />
               </div>
 
               <button
@@ -237,7 +217,7 @@ export default function LoginPage() {
                 className="w-full py-3 px-4 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold rounded-[10px] transition-colors flex items-center justify-center gap-2"
               >
                 <Lock className="w-4 h-4" />
-                <span>{loading ? 'Verifying Credentials...' : 'Sign In to Seller Workspace'}</span>
+                <span>{loading ? 'Signing In...' : 'Sign In to Workspace'}</span>
               </button>
 
               <button
@@ -246,53 +226,40 @@ export default function LoginPage() {
                 onClick={handleGoogleLogin}
                 className="w-full py-2.5 px-4 bg-white border border-[#E5E7EB] hover:bg-[#F8FAFC] text-[#111827] text-xs font-semibold rounded-[10px] transition-colors"
               >
-                Continue with Google OAuth
+                Continue with Google
               </button>
             </form>
           )}
 
-          {/* MODE 2: SEPARATE ADMIN PORTAL (USERNAME + STRONG PASSWORD + MANDATORY 2FA) */}
+          {/* MODE 2: ADMIN LOGIN (STANDARD USERNAME/EMAIL + PASSWORD) */}
           {portalMode === 'admin' && (
             <form onSubmit={handleAdminSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                  Admin Username or Compliance Email *
+                  Administrator Username or Email *
                 </label>
                 <input
                   type="text"
                   required
                   value={adminUser}
                   onChange={(e) => setAdminUser(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm text-[#111827]"
+                  className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
+                  placeholder="admin@platform.com"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Strong Admin Password *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Mandatory 2FA Code *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={6}
-                    value={admin2faCode}
-                    onChange={(e) => setAdmin2faCode(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm tracking-widest"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#111827] mb-1.5">
+                  Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm text-[#111827] focus:outline-none focus:border-[#2563EB]"
+                  placeholder="Enter administrator password"
+                />
               </div>
 
               <button
@@ -302,7 +269,7 @@ export default function LoginPage() {
               >
                 <ShieldCheck className="w-4 h-4 text-[#2563EB]" />
                 <span>
-                  {loading ? 'Verifying 2FA & RBAC...' : 'Verify 2FA & Enter Admin Console'}
+                  {loading ? 'Verifying Credentials...' : 'Sign In to Admin Console'}
                 </span>
               </button>
             </form>
@@ -321,12 +288,13 @@ export default function LoginPage() {
                   value={resetEmail}
                   onChange={(e) => setResetEmail(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm"
+                  placeholder="name@example.com"
                 />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    Email Verification OTP *
+                    Email Verification Code *
                   </label>
                   <input
                     type="text"
@@ -335,11 +303,12 @@ export default function LoginPage() {
                     value={resetOtp}
                     onChange={(e) => setResetOtp(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-sm"
+                    placeholder="6-digit code"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#111827] mb-1.5">
-                    New Strong Password (≥8 chars) *
+                    New Password (≥8 chars) *
                   </label>
                   <input
                     type="password"
@@ -348,6 +317,7 @@ export default function LoginPage() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] text-sm"
+                    placeholder="At least 8 characters"
                   />
                 </div>
               </div>
@@ -360,8 +330,6 @@ export default function LoginPage() {
               </button>
             </form>
           )}
-
-
 
           <div className="text-center text-xs text-[#6B7280] pt-1">
             New entrepreneur?{' '}

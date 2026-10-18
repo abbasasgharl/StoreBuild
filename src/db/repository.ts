@@ -35,7 +35,7 @@ import {
   paymentWebhookLogs,
   auditLogs,
 } from './schema.ts';
-import { eq, desc, and, or, isNull, gte, sql } from 'drizzle-orm';
+import { eq, desc, and, or, isNull, gte, sql, ne } from 'drizzle-orm';
 import { GENERATED_ASSETS, RESERVED_STORE_SLUGS } from '../constants/assets.ts';
 import { runBoundedAgentAnalysis, getRateLimitTelemetry } from '../lib/geminiRateLimited.ts';
 import { generateTotp, verifyTotp } from '../lib/totp.ts';
@@ -399,6 +399,14 @@ export async function authenticateCredentials(payload: AuthCredentialsPayload) {
   };
 }
 
+export async function revokeSessionByHash(tokenHash: string) {
+  if (!tokenHash) return;
+  await db
+    .update(sessions)
+    .set({ revokedAt: new Date() })
+    .where(eq(sessions.sessionTokenHash, tokenHash));
+}
+
 export async function authenticateSellerCredentials(payload: {
   identifier: string;
   password?: string;
@@ -550,6 +558,120 @@ export async function resetSellerPassword(payload: {
   return { success: true, message: 'Password updated securely. All prior active sessions revoked.' };
 }
 
+/**
+ * Account -> Change Password (Audit Section 7 & Rules N001, N006, N007)
+ * - Verifies current password server-side against stored salted scrypt hash
+ * - Enforces minimum 8 characters, disallows common weak passwords, rejects reusing identical password
+ * - Hashes new password securely with unique cryptographically random salt
+ * - Revokes all other active sessions (preserving the current session if token is provided)
+ * - Records an immutable audit log entry
+ * - Creates an in-app security alert notification
+ */
+export async function changeUserPassword(payload: {
+  uid: string;
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+  currentSessionToken?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}) {
+  const { uid, currentPassword, newPassword, confirmPassword, currentSessionToken } = payload;
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    throw new Error('Please fill in your current password, new password, and confirmation.');
+  }
+
+  if (newPassword !== confirmPassword) {
+    throw new Error('New password and confirmation do not match.');
+  }
+
+  if (newPassword.length < 8) {
+    throw new Error('New password must be at least 8 characters long.');
+  }
+
+  const commonWeak = ['password', '12345678', 'qwerty123', 'admin123', 'velora2026', 'letmein1'];
+  if (commonWeak.includes(newPassword.toLowerCase())) {
+    throw new Error('This password is too common. Please choose a stronger password.');
+  }
+
+  const [user] = await db.select().from(users).where(eq(users.uid, uid));
+  if (!user) {
+    throw new Error('User account not found.');
+  }
+
+  // Server-side current password verification
+  const isCurrentValid = verifyPassword(currentPassword, user.passwordHash, user.passwordSalt);
+  if (!isCurrentValid) {
+    throw new Error('The current password entered is incorrect.');
+  }
+
+  // Reject reusing current password
+  const isReused = verifyPassword(newPassword, user.passwordHash, user.passwordSalt);
+  if (isReused) {
+    throw new Error('New password cannot be the same as your current password.');
+  }
+
+  // Hash new password securely
+  const { hash, salt } = hashPassword(newPassword);
+  await db
+    .update(users)
+    .set({
+      passwordHash: hash,
+      passwordSalt: salt,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    })
+    .where(eq(users.id, user.id));
+
+  // Revoke other active sessions for this user
+  if (currentSessionToken) {
+    const currentHash = crypto.createHash('sha256').update(currentSessionToken).digest('hex');
+    await db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(sessions.userUid, user.uid),
+          ne(sessions.sessionTokenHash, currentHash)
+        )
+      );
+  } else {
+    await db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(eq(sessions.userUid, user.uid));
+  }
+
+  // Record audit log
+  await db.insert(auditLogs).values({
+    actorUid: user.uid,
+    actorRole: user.role,
+    actionType: 'password_changed',
+    targetEntity: 'user',
+    targetRef: user.email,
+    details: `User changed account password from ${payload.ipAddress || 'unknown IP'}. Other sessions revoked.`,
+  });
+
+  // Security notification
+  const [store] = await db.select().from(stores).where(eq(stores.sellerId, user.id));
+  if (store) {
+    await db.insert(notifications).values({
+      storeId: store.id,
+      recipientRole: 'seller',
+      channel: 'in_app',
+      category: 'security',
+      title: 'Security Alert: Password Changed',
+      message: 'Your account password was successfully updated. All other active sessions have been revoked.',
+    });
+  }
+
+  return {
+    success: true,
+    message: 'Your password has been updated successfully. Other active sessions were revoked for security.',
+  };
+}
+
 export async function registerSellerAndSendOtp(payload: {
   uid: string;
   username?: string;
@@ -569,7 +691,10 @@ export async function registerSellerAndSendOtp(payload: {
   }
 
   const setupPaymentRef = `PAY-SETUP-${Math.floor(10000 + Math.random() * 89999)}`;
-  const pw = hashPassword(payload.password || 'Velora@2026');
+  if (!payload.password || payload.password.trim().length < 8) {
+    throw new Error('A secure password with at least 8 characters is required.');
+  }
+  const pw = hashPassword(payload.password.trim());
   const cleanUsername =
     (payload.username || payload.storeSlug).toLowerCase().replace(/[^a-z0-9_]/g, '') ||
     `seller_${Date.now()}`;
@@ -2567,7 +2692,7 @@ export async function replyToSupportTicket(payload: {
   if (!ticket) throw new Error('Support ticket not found.');
 
   // Enforce tenant isolation if seller is acting
-  if (payload.actorRole === 'seller' && ticket.sellerUid !== payload.actorUid && payload.actorUid !== 'seller-velora-uid') {
+  if (payload.actorRole === 'seller' && ticket.sellerUid !== payload.actorUid) {
     throw new Error('Tenant isolation error: Cannot access another seller’s support ticket.');
   }
 

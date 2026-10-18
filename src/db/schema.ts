@@ -12,8 +12,8 @@ export const users = pgTable('users', {
   mobile: text('mobile').default(''),
   role: text('role').default('seller').notNull(), // 'buyer' | 'seller' | 'admin' | 'agent'
   status: text('status').default('active').notNull(), // 'pending_payment' | 'pending_otp' | 'active' | 'suspended'
-  twoFactorVerified: boolean('two_factor_verified').default(true).notNull(),
-  twoFactorSecret: text('two_factor_secret').default('JBSWY3DPEHPK3PXP'),
+  twoFactorVerified: boolean('two_factor_verified').default(false).notNull(),
+  twoFactorSecret: text('two_factor_secret').default(''),
   failedLoginAttempts: integer('failed_login_attempts').default(0).notNull(),
   lockedUntil: timestamp('locked_until'),
   lastLoginAt: timestamp('last_login_at').defaultNow(),
@@ -43,7 +43,7 @@ export const sellerProfiles = pgTable('seller_profiles', {
   setupPaymentRef: text('setup_payment_ref').default(''),
   otpVerified: boolean('otp_verified').default(false).notNull(),
   onboardingStep: integer('onboarding_step').default(1).notNull(), // 1..8
-  kycStatus: text('kyc_status').default('Verified').notNull(),
+  kycStatus: text('kyc_status').default('Pending Review').notNull(),
   suspendedReason: text('suspended_reason').default(''),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -236,7 +236,7 @@ export const payoutAccounts = pgTable('payout_accounts', {
   bankAccountNumber: text('bank_account_number').default(''),
   ifscCode: text('ifsc_code').default(''),
   bankName: text('bank_name').default(''),
-  verificationStatus: text('verification_status').default('Verified').notNull(), // 'Verified' | 'Temporary Hold - Security Review'
+  verificationStatus: text('verification_status').default('Pending').notNull(), // 'Pending' | 'Verified' | 'Temporary Hold - Security Review'
   securityHoldUntil: timestamp('security_hold_until'),
   updatedAt: timestamp('updated_at').defaultNow(),
 });

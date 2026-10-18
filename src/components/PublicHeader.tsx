@@ -29,12 +29,12 @@ export function PublicHeader() {
         >
           Pricing
         </Link>
-        <Link
-          to="/velora"
+        <a
+          href="/#features"
           className="hover:text-[#111827] hover:underline underline-offset-4 transition-colors whitespace-nowrap"
         >
-          Live Storefront
-        </Link>
+          Features
+        </a>
         <Link
           to="/app/dashboard"
           className="hover:text-[#111827] hover:underline underline-offset-4 transition-colors whitespace-nowrap"

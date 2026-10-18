@@ -178,6 +178,26 @@ async function startServer() {
     next();
   });
 
+  const authGuard: express.RequestHandler = async (req, res, next) => {
+    try {
+      const [{ requireAuth }] = await modulesPromise;
+      await requireAuth(req as AuthRequest, res, next);
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  const adminGuard: express.RequestHandler = async (req, res, next) => {
+    try {
+      const [{ requireAuth, requireAdmin }] = await modulesPromise;
+      await requireAuth(req as AuthRequest, res, async () => {
+        await requireAdmin(req as AuthRequest, res, next);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   api.get('/health', (_req, res) => {
     res.json({ status: 'ok', version: '2.0' });
   });
@@ -252,6 +272,30 @@ async function startServer() {
       res.json(result);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Password reset failed' });
+    }
+  });
+
+  // Account -> Change Password (Sellers and Admins)
+  api.post('/auth/change-password', authGuard, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated session identity.' });
+      }
+      const [, repo] = await modulesPromise;
+      const authHeader = req.headers.authorization || '';
+      const currentSessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+      const result = await repo.changeUserPassword({
+        uid: req.user.uid,
+        currentPassword: req.body.currentPassword,
+        newPassword: req.body.newPassword,
+        confirmPassword: req.body.confirmPassword,
+        currentSessionToken,
+        ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || 'Web Client',
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Password update failed' });
     }
   });
 
@@ -351,30 +395,13 @@ async function startServer() {
     }
   });
 
-  const authGuard: express.RequestHandler = async (req, res, next) => {
-    try {
-      const [{ requireAuth }] = await modulesPromise;
-      await requireAuth(req as AuthRequest, res, next);
-    } catch (err) {
-      next(err);
-    }
-  };
-
-  const adminGuard: express.RequestHandler = async (req, res, next) => {
-    try {
-      const [{ requireAuth, requireAdmin }] = await modulesPromise;
-      await requireAuth(req as AuthRequest, res, async () => {
-        await requireAdmin(req as AuthRequest, res, next);
-      });
-    } catch (err) {
-      next(err);
-    }
-  };
-
   // Authenticated Seller Tenant-Scoped APIs
   api.get('/seller/context', authGuard, async (req: AuthRequest, res) => {
     try {
-      const uid = req.user?.uid || 'seller-velora-uid';
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
+      const uid = req.user.uid;
       const cacheKey = `seller_ctx:${uid}`;
       const cached = getCached(cacheKey);
       if (cached) {
@@ -391,8 +418,11 @@ async function startServer() {
 
   api.post('/seller/products', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const product = await repo.createOrUpdateProduct(uid, req.body);
       res.json(product);
     } catch (error: any) {
@@ -402,8 +432,11 @@ async function startServer() {
 
   api.put('/seller/branding', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.updateStoreBrandingAndSettings(uid, req.body);
       res.json(updated);
     } catch (error: any) {
@@ -413,8 +446,11 @@ async function startServer() {
 
   api.post('/seller/orders/:orderId/state', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.updateSellerOrderState(uid, Number(req.params.orderId), req.body);
       res.json(updated);
     } catch (error: any) {
@@ -424,8 +460,11 @@ async function startServer() {
 
   api.post('/seller/returns/:returnId/action', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.handleSellerReturnAction(
         uid,
         Number(req.params.returnId),
@@ -440,8 +479,11 @@ async function startServer() {
 
   api.put('/seller/payout-profile', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.updateSellerPayoutProfile(uid, req.body);
       res.json(updated);
     } catch (error: any) {
@@ -451,8 +493,11 @@ async function startServer() {
 
   api.post('/seller/payouts/run-weekly', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.runSellerWeeklyPayoutSimulation(uid);
       res.json(updated);
     } catch (error: any) {
@@ -463,8 +508,11 @@ async function startServer() {
   // Seller-to-Admin Support Ticket creation
   api.post('/seller/support/tickets', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated tenant identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
+      const uid = req.user.uid;
       const updated = await repo.createSellerSupportTicket(uid, req.body);
       res.json(updated);
     } catch (error: any) {
@@ -473,20 +521,23 @@ async function startServer() {
   });
 
   // Reply / Status / Internal Note on Support Ticket (Seller or Admin)
+  // Non-negotiable N006: Support role must come from authenticated DB user, never req.body.actorRole or UID substring
   api.post('/support/tickets/:ticketId/reply', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const uid = req.user?.uid || 'seller-velora-uid';
-      const actorRole =
-        req.body.actorRole === 'admin' || uid.includes('admin') ? 'admin' : 'seller';
+      const uid = req.user.uid;
+      const actorRole = req.user.role === 'admin' ? 'admin' : 'seller';
       const updated = await repo.replyToSupportTicket({
         actorUid: uid,
         actorRole,
         ticketId: Number(req.params.ticketId),
         message: req.body.message,
-        nextStatus: req.body.nextStatus,
-        assignedTo: req.body.assignedTo,
-        isInternalNote: req.body.isInternalNote,
+        nextStatus: actorRole === 'admin' ? req.body.nextStatus : undefined,
+        assignedTo: actorRole === 'admin' ? req.body.assignedTo : undefined,
+        isInternalNote: actorRole === 'admin' ? Boolean(req.body.isInternalNote) : false,
       });
       res.json(updated);
     } catch (error: any) {
@@ -516,7 +567,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.executeAdminGovernanceAction({
-        adminUid: req.user?.uid || 'admin-console-root',
+        adminUid: req.user!.uid,
         ...req.body,
       });
       res.json(overview);
@@ -540,7 +591,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.handleAgentApprovalAction({
-        adminUid: req.user?.uid || 'admin-console-root',
+        adminUid: req.user!.uid,
         actionId: Number(req.params.actionId),
         decision: req.body.decision,
       });
@@ -554,7 +605,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.toggleAgentEmergencyKillSwitch(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         Boolean(req.body.disable)
       );
       res.json(overview);
@@ -568,7 +619,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.updateGlobalSeoSettings(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.body
       );
       res.json(overview);
@@ -581,7 +632,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const overview = await repo.updateAdIntegrationSettings(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.body
       );
       res.json(overview);
@@ -641,7 +692,7 @@ async function startServer() {
   api.post('/admin/roles', adminGuard, async (req: AuthRequest, res) => {
     try {
       const [, repo] = await modulesPromise;
-      const created = await repo.createRole(req.user?.uid || 'admin-console-root', req.body);
+      const created = await repo.createRole(req.user!.uid, req.body);
       res.json(created);
     } catch (error: any) {
       res.status(400).json({ error: error.message || 'Failed to create role' });
@@ -652,7 +703,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const updated = await repo.updateRole(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.params.roleKey,
         req.body
       );
@@ -666,7 +717,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const toggled = await repo.toggleRoleStatus(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.params.roleKey
       );
       res.json(toggled);
@@ -679,7 +730,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const deleted = await repo.deleteRole(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.params.roleKey
       );
       res.json(deleted);
@@ -702,7 +753,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const result = await repo.assignUserRole(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.params.uid,
         req.body.roleKey
       );
@@ -800,8 +851,11 @@ async function startServer() {
 
   api.post('/ads/campaigns', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const actorUid = req.user.uid;
       const created = await repo.createAdCampaign(actorUid, req.body);
       res.json(created);
     } catch (error: any) {
@@ -811,8 +865,11 @@ async function startServer() {
 
   api.put('/ads/campaigns/:id', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const actorUid = req.user.uid;
       const updated = await repo.updateAdCampaign(actorUid, Number(req.params.id), req.body);
       res.json(updated);
     } catch (error: any) {
@@ -822,8 +879,11 @@ async function startServer() {
 
   api.post('/ads/campaigns/:id/status', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const actorUid = req.user.uid;
       const updated = await repo.toggleAdCampaignStatus(
         actorUid,
         Number(req.params.id),
@@ -837,8 +897,11 @@ async function startServer() {
 
   api.delete('/ads/campaigns/:id', authGuard, async (req: AuthRequest, res) => {
     try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: 'Unauthorized: Missing authenticated identity.' });
+      }
       const [, repo] = await modulesPromise;
-      const actorUid = req.user?.uid || 'seller-velora-uid';
+      const actorUid = req.user.uid;
       const result = await repo.deleteAdCampaign(actorUid, Number(req.params.id));
       res.json(result);
     } catch (error: any) {
@@ -897,7 +960,7 @@ async function startServer() {
     try {
       const [, repo] = await modulesPromise;
       const verified = await repo.verifyAdIntegration(
-        req.user?.uid || 'admin-console-root',
+        req.user!.uid,
         req.params.providerKey
       );
       res.json(verified);

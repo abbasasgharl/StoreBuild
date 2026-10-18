@@ -41,8 +41,7 @@ export default function CreateStorePage() {
     reason: string;
   }>({ checking: false, available: null, reason: '' });
 
-  // Phase 2 fields (OTP)
-  const [dispatchedOtp, setDispatchedOtp] = useState('');
+  // Phase 2 fields (Email verification)
   const [setupPaymentRef, setSetupPaymentRef] = useState('');
   const [enteredOtp, setEnteredOtp] = useState('');
   const [createdUid, setCreatedUid] = useState('');
@@ -142,8 +141,7 @@ export default function CreateStorePage() {
       }
       setCreatedUid(generatedUid);
       setSetupPaymentRef(data.setupPaymentRef);
-      setDispatchedOtp(data.otpCode);
-      setEnteredOtp(data.otpCode);
+      setEnteredOtp(''); // Non-negotiable N002: Keep OTP input blank until manually entered
       setWhatsappNumber(mobile.replace(/[^0-9]/g, '') || '919820144910');
       setUpiId(`${storeSlug.toLowerCase()}@okaxis`);
       setPhase('otp_verification');
@@ -263,15 +261,15 @@ export default function CreateStorePage() {
               Seller Onboarding & Store Activation
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#111827]">
-              {phase === 'signup_and_payment' && 'Step 1: Claim Your Store Slug & Setup Plan'}
-              {phase === 'otp_verification' && 'Step 2: Verify Activation Email OTP'}
-              {phase === 'guided_wizard' && 'Step 3: Guided Store Launch Wizard'}
+              {phase === 'signup_and_payment' && 'Step 1: Choose Your Store Name & Plan'}
+              {phase === 'otp_verification' && 'Step 2: Check Your Email'}
+              {phase === 'guided_wizard' && 'Step 3: Set Up Your Store'}
             </h1>
           </div>
           <div className="text-xs font-mono text-[#6B7280]">
-            {phase === 'signup_and_payment' && 'Phase 1 of 3 · Details & Setup Fee'}
-            {phase === 'otp_verification' && 'Phase 2 of 3 · Webhook Verified → OTP Gate'}
-            {phase === 'guided_wizard' && `Phase 3 of 3 · Wizard (${wizardStep + 1}/8)`}
+            {phase === 'signup_and_payment' && 'Step 1 of 3 · Store Details'}
+            {phase === 'otp_verification' && 'Step 2 of 3 · Verify Email'}
+            {phase === 'guided_wizard' && `Step 3 of 3 · Store Setup (${wizardStep + 1}/8)`}
           </div>
         </div>
 
@@ -466,38 +464,37 @@ export default function CreateStorePage() {
           </form>
         )}
 
-        {/* PHASE 2: EMAIL OTP VERIFICATION AFTER SETUP FEE WEBHOOK */}
+        {/* PHASE 2: EMAIL VERIFICATION */}
         {phase === 'otp_verification' && (
           <form
             onSubmit={handleVerifyOtp}
             className="bg-white border border-[#E5E7EB] rounded-[18px] p-8 space-y-6 shadow-xs"
           >
-            <div className="p-4 rounded-[12px] bg-emerald-50 border border-emerald-200 space-y-1">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#16A34A]">
+            <div className="p-4 rounded-[12px] bg-blue-50 border border-blue-200 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#2563EB]">
                 <ShieldCheck className="w-4 h-4" />
-                <span>Setup Fee Webhook Confirmed ({setupPaymentRef})</span>
+                <span>Check your email</span>
               </div>
               <p className="text-xs text-[#111827]">
-                We dispatched a 6-digit activation OTP to <strong>{email}</strong>. For immediate
-                evaluation in this environment, your generated code is{' '}
-                <span className="font-mono font-bold underline">{dispatchedOtp}</span>.
+                We sent a 6-digit code to <strong>{email}</strong>. Enter the 6-digit code we sent to your email to verify your account.
               </p>
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-[#111827] mb-2">
-                Enter 6-Digit Email OTP to Activate Account
+                Enter the 6-digit code we sent to your email
               </label>
               <input
                 type="text"
                 required
                 maxLength={6}
                 value={enteredOtp}
-                onChange={(e) => setEnteredOtp(e.target.value)}
+                onChange={(e) => setEnteredOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="······"
                 className="w-full max-w-xs px-4 py-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-[10px] font-mono text-xl font-bold tracking-widest text-[#111827]"
               />
               <p className="text-xs text-[#6B7280] mt-2">
-                Short 10-minute expiry · Hashed server storage · Rate limited (max 5 attempts)
+                Your code expires in 10 minutes. Please enter it above to proceed.
               </p>
             </div>
 
@@ -511,10 +508,10 @@ export default function CreateStorePage() {
               </button>
               <button
                 type="submit"
-                disabled={submitting}
-                className="px-6 py-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold rounded-[12px] transition-colors flex items-center gap-2"
+                disabled={submitting || enteredOtp.trim().length !== 6}
+                className="px-6 py-3 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white text-sm font-semibold rounded-[12px] transition-colors flex items-center gap-2"
               >
-                {submitting ? 'Activating Account...' : 'Verify OTP & Launch Guided Wizard'}
+                {submitting ? 'Verifying email...' : 'Verify email'}
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
