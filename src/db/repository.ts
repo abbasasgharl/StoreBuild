@@ -673,7 +673,7 @@ export async function changeUserPassword(payload: {
 }
 
 export async function registerSellerAndSendOtp(payload: {
-  uid: string;
+  uid?: string;
   username?: string;
   password?: string;
   fullName: string;
@@ -690,6 +690,7 @@ export async function registerSellerAndSendOtp(payload: {
     throw new Error(slugCheck.reason);
   }
 
+  const sellerUid = payload.uid?.trim() || `seller_${crypto.randomUUID()}`;
   const setupPaymentRef = `PAY-SETUP-${Math.floor(10000 + Math.random() * 89999)}`;
   if (!payload.password || payload.password.trim().length < 8) {
     throw new Error('A secure password with at least 8 characters is required.');
@@ -702,7 +703,7 @@ export async function registerSellerAndSendOtp(payload: {
   const [user] = await db
     .insert(users)
     .values({
-      uid: payload.uid,
+      uid: sellerUid,
       username: cleanUsername,
       email: payload.email.toLowerCase().trim(),
       passwordHash: pw.hash,
@@ -727,7 +728,7 @@ export async function registerSellerAndSendOtp(payload: {
     .insert(sellerProfiles)
     .values({
       userId: user.id,
-      uid: payload.uid,
+      uid: sellerUid,
       businessName: payload.businessName.trim(),
       setupPlan: payload.setupPlan,
       setupFeeAmount: payload.setupFeeAmount,
@@ -735,7 +736,7 @@ export async function registerSellerAndSendOtp(payload: {
       setupPaymentRef,
       otpVerified: false,
       onboardingStep: 1,
-      kycStatus: 'Pending Payment & Verification',
+      kycStatus: 'Pending_Review',
     })
     .onConflictDoUpdate({
       target: sellerProfiles.uid,
@@ -749,7 +750,7 @@ export async function registerSellerAndSendOtp(payload: {
     .insert(stores)
     .values({
       sellerId: user.id,
-      uid: payload.uid,
+      uid: sellerUid,
       slug: slugCheck.slug,
       name: payload.businessName.trim(),
       tagline: `Official Branded Storefront of ${payload.businessName.trim()}`,
@@ -777,7 +778,7 @@ export async function registerSellerAndSendOtp(payload: {
     }),
     db.insert(wallets).values({
       storeId: store.id,
-      sellerUid: payload.uid,
+      sellerUid,
       availableBalance: 0,
       pendingBalance: 0,
       heldBalance: 0,
@@ -787,7 +788,7 @@ export async function registerSellerAndSendOtp(payload: {
     }),
     db.insert(payoutAccounts).values({
       storeId: store.id,
-      sellerUid: payload.uid,
+      sellerUid,
       method: 'upi',
       upiId: '',
       accountHolderName: payload.fullName.trim(),
@@ -819,7 +820,7 @@ export async function registerSellerAndSendOtp(payload: {
       message: `Setup payment reference ${setupPaymentRef} registered for platform.com/${store.slug}. Complete verification to activate.`,
     }),
     db.insert(auditLogs).values({
-      actorUid: payload.uid,
+      actorUid: sellerUid,
       actorRole: 'seller',
       storeId: store.id,
       actionType: 'seller_registered',
@@ -888,9 +889,10 @@ export async function verifySellerOtp(email: string, code: string) {
     .returning();
 
   if (user) {
+    // N007 & G6: Eliminate automated registration updates. kycStatus strictly remains Pending_Review, setupFeePaid remains false without explicit payment records.
     await db
       .update(sellerProfiles)
-      .set({ otpVerified: true, setupFeePaid: true, onboardingStep: 2, kycStatus: 'Verified' })
+      .set({ otpVerified: true, onboardingStep: 2, kycStatus: 'Pending_Review' })
       .where(eq(sellerProfiles.uid, user.uid));
 
     const [store] = await db.select().from(stores).where(eq(stores.uid, user.uid));
@@ -3017,6 +3019,7 @@ export async function getAdminConsoleOverview() {
     allAuditLogs,
     allLedger,
     allGateways,
+    allUsers,
   ] = await Promise.all([
     db.select().from(stores).orderBy(desc(stores.id)),
     db.select().from(sellerProfiles),
@@ -3039,6 +3042,7 @@ export async function getAdminConsoleOverview() {
     db.select().from(auditLogs).orderBy(desc(auditLogs.id)),
     db.select().from(walletTransactions).orderBy(desc(walletTransactions.id)),
     db.select().from(paymentGateways),
+    db.select().from(users),
   ]);
 
   const paidOrders = allOrders.filter(
@@ -3070,8 +3074,20 @@ export async function getAdminConsoleOverview() {
     },
     sellers: allStores.map((st) => {
       const pa = allPayoutAccounts.find((p) => p.storeId === st.id);
+      const user = allUsers.find((u) => u.uid === st.uid) || null;
       return {
         store: st,
+        user: user
+          ? {
+              id: user.id,
+              uid: user.uid,
+              email: user.email,
+              fullName: user.fullName,
+              mobile: user.mobile,
+              status: user.status,
+              createdAt: user.createdAt,
+            }
+          : null,
         profile: allProfiles.find((p) => p.uid === st.uid) || null,
         wallet: allWallets.find((w) => w.storeId === st.id) || null,
         payoutAccount: pa
@@ -3137,7 +3153,10 @@ export async function executeAdminGovernanceAction(payload: {
     | 'toggle_store_suspension'
     | 'toggle_wallet_hold'
     | 'approve_payout'
-    | 'verify_payout_account';
+    | 'verify_payout_account'
+    | 'approve_kyc'
+    | 'reject_kyc'
+    | 'toggle_store_publish';
   storeId: number;
   payoutId?: number;
   reason: string;
@@ -3170,6 +3189,78 @@ export async function executeAdminGovernanceAction(payload: {
         targetEntity: 'store',
         targetRef: store.slug,
         details: `Store /${store.slug} status set to ${nextStatus}. Reason: ${payload.reason}`,
+      }),
+    ]);
+  } else if (payload.actionType === 'toggle_store_publish') {
+    const nextPublished = !store.isPublished;
+    await db.update(stores).set({ isPublished: nextPublished }).where(eq(stores.id, store.id));
+    await Promise.all([
+      db.insert(notifications).values({
+        storeId: store.id,
+        recipientRole: 'seller',
+        channel: 'email',
+        category: 'lifecycle',
+        title: nextPublished ? 'Storefront Published' : 'Storefront Unpublished',
+        message: `Store visibility was updated by admin. Reason: ${payload.reason}`,
+      }),
+      db.insert(auditLogs).values({
+        actorUid: payload.adminUid || 'admin-console-root',
+        actorRole: 'admin',
+        storeId: store.id,
+        actionType: nextPublished ? 'store_published' : 'store_unpublished',
+        targetEntity: 'store',
+        targetRef: store.slug,
+        details: `Store /${store.slug} publish state set to ${nextPublished}. Reason: ${payload.reason}`,
+      }),
+    ]);
+  } else if (payload.actionType === 'approve_kyc') {
+    await db
+      .update(sellerProfiles)
+      .set({ kycStatus: 'Verified', suspendedReason: '' })
+      .where(eq(sellerProfiles.uid, store.uid));
+
+    await Promise.all([
+      db.insert(notifications).values({
+        storeId: store.id,
+        recipientRole: 'seller',
+        channel: 'email',
+        category: 'compliance',
+        title: 'KYC Verification Approved',
+        message: `Your business compliance and KYC verification have been reviewed and approved. Review note: ${payload.reason}`,
+      }),
+      db.insert(auditLogs).values({
+        actorUid: payload.adminUid || 'admin-console-root',
+        actorRole: 'admin',
+        storeId: store.id,
+        actionType: 'kyc_approved',
+        targetEntity: 'seller_profile',
+        targetRef: store.slug,
+        details: `Approved KYC compliance for seller /${store.slug}. Reason: ${payload.reason}`,
+      }),
+    ]);
+  } else if (payload.actionType === 'reject_kyc') {
+    await db
+      .update(sellerProfiles)
+      .set({ kycStatus: 'Rejected', suspendedReason: payload.reason })
+      .where(eq(sellerProfiles.uid, store.uid));
+
+    await Promise.all([
+      db.insert(notifications).values({
+        storeId: store.id,
+        recipientRole: 'seller',
+        channel: 'email',
+        category: 'compliance',
+        title: 'KYC Verification Rejected',
+        message: `Your business verification was rejected. Reason: ${payload.reason}. Please update your identity documents.`,
+      }),
+      db.insert(auditLogs).values({
+        actorUid: payload.adminUid || 'admin-console-root',
+        actorRole: 'admin',
+        storeId: store.id,
+        actionType: 'kyc_rejected',
+        targetEntity: 'seller_profile',
+        targetRef: store.slug,
+        details: `Rejected KYC compliance for seller /${store.slug}. Rejection reason: ${payload.reason}`,
       }),
     ]);
   } else if (payload.actionType === 'toggle_wallet_hold') {
@@ -3241,6 +3332,113 @@ export async function executeAdminGovernanceAction(payload: {
   }
 
   return await getAdminConsoleOverview();
+}
+
+/**
+ * Administrative KYC Review Endpoint (Audit Section 10, Rules N006, N007, G6)
+ * - Requires verified administrative identity
+ * - Looks up target merchant record by merchantId, storeId, merchantUid, or storeSlug
+ * - Applies final status (Approved or Rejected) to sellerProfiles.kycStatus
+ * - Appends the review reasoning string to audit database log
+ * - Dispatches formal compliance notification to the merchant
+ */
+export async function reviewMerchantKyc(payload: {
+  adminUid: string;
+  merchantId?: number;
+  storeId?: number;
+  merchantUid?: string;
+  storeSlug?: string;
+  status: 'Approved' | 'Rejected' | 'Verified';
+  reason: string;
+}) {
+  const { adminUid, merchantId, storeId, merchantUid, storeSlug, status, reason = '' } = payload;
+
+  const normalizedStatus =
+    status === 'Approved' || status === 'Verified' ? 'Approved' : 'Rejected';
+
+  // Look up target merchant record across identifiers
+  let targetStore: any = null;
+  let targetProfile: any = null;
+
+  if (storeId) {
+    const [st] = await db.select().from(stores).where(eq(stores.id, storeId));
+    targetStore = st;
+    if (st) {
+      const [prof] = await db.select().from(sellerProfiles).where(eq(sellerProfiles.uid, st.uid));
+      targetProfile = prof;
+    }
+  } else if (merchantId) {
+    const [prof] = await db.select().from(sellerProfiles).where(eq(sellerProfiles.id, merchantId));
+    targetProfile = prof;
+    if (prof) {
+      const [st] = await db.select().from(stores).where(eq(stores.uid, prof.uid));
+      targetStore = st;
+    }
+  } else if (merchantUid) {
+    const [prof] = await db.select().from(sellerProfiles).where(eq(sellerProfiles.uid, merchantUid));
+    targetProfile = prof;
+    const [st] = await db.select().from(stores).where(eq(stores.uid, merchantUid));
+    targetStore = st;
+  } else if (storeSlug) {
+    const [st] = await db.select().from(stores).where(eq(stores.slug, storeSlug.trim()));
+    targetStore = st;
+    if (st) {
+      const [prof] = await db.select().from(sellerProfiles).where(eq(sellerProfiles.uid, st.uid));
+      targetProfile = prof;
+    }
+  }
+
+  if (!targetProfile && !targetStore) {
+    throw new Error('Merchant record not found. Please provide a valid storeId, merchantId, merchantUid, or storeSlug.');
+  }
+
+  const effectiveUid = targetProfile?.uid || targetStore?.uid;
+
+  // Apply final status to merchant profile
+  await db
+    .update(sellerProfiles)
+    .set({
+      kycStatus: normalizedStatus,
+      suspendedReason: normalizedStatus === 'Rejected' ? reason.trim() : '',
+    })
+    .where(eq(sellerProfiles.uid, effectiveUid));
+
+  // Append the review reasoning string to the audit database log
+  const auditDetails = `Administrative KYC decision: ${normalizedStatus}. Review Reasoning: ${reason.trim() || 'Reviewed and adjudicated in administrative compliance queue.'}`;
+  await db.insert(auditLogs).values({
+    actorUid: adminUid,
+    actorRole: 'admin',
+    storeId: targetStore?.id || null,
+    actionType: normalizedStatus === 'Approved' ? 'kyc_approved' : 'kyc_rejected',
+    targetEntity: 'merchant_kyc',
+    targetRef: targetStore?.slug || effectiveUid,
+    details: auditDetails,
+  });
+
+  if (targetStore) {
+    await db.insert(notifications).values({
+      storeId: targetStore.id,
+      recipientRole: 'seller',
+      channel: 'email',
+      category: 'compliance',
+      title: normalizedStatus === 'Approved' ? 'KYC Verification Approved' : 'KYC Verification Rejected',
+      message: normalizedStatus === 'Approved'
+        ? `Your merchant verification has been Approved by compliance administrators. Note: ${reason.trim() || 'All submitted credentials verified.'}`
+        : `Your merchant verification was Rejected. Note: ${reason.trim() || 'Please re-submit identity and business documentation.'}`,
+    });
+  }
+
+  return {
+    success: true,
+    merchantUid: effectiveUid,
+    merchantId: targetProfile?.id,
+    storeId: targetStore?.id,
+    storeSlug: targetStore?.slug,
+    finalStatus: normalizedStatus,
+    reasoning: reason.trim(),
+    reviewedBy: adminUid,
+    reviewedAt: new Date(),
+  };
 }
 
 // ============================================================================

@@ -576,6 +576,40 @@ async function startServer() {
     }
   });
 
+  // Distinct administrative router path for merchant KYC review (Rules N006, N007 & G6 constraints)
+  api.post('/admin/kyc/review', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const { merchantId, storeId, merchantUid, uid, storeSlug, status, reason, reasoning } = req.body;
+      const reviewReason = String(reason || reasoning || '').trim();
+
+      if (!status || (status !== 'Approved' && status !== 'Rejected' && status !== 'Verified')) {
+        return res.status(400).json({ error: 'Validation error: status must be "Approved" or "Rejected".' });
+      }
+
+      if (!reviewReason) {
+        return res.status(400).json({
+          error: 'Validation error: A mandatory review reasoning string is required for administrative compliance audit logging.',
+        });
+      }
+
+      const result = await repo.reviewMerchantKyc({
+        adminUid: req.user!.uid,
+        merchantId: merchantId ? Number(merchantId) : undefined,
+        storeId: storeId ? Number(storeId) : undefined,
+        merchantUid: merchantUid || uid,
+        storeSlug: storeSlug ? String(storeSlug).trim() : undefined,
+        status,
+        reason: reviewReason,
+      });
+
+      // Drop out with standardized JSON response
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message || 'Administrative KYC review failed' });
+    }
+  });
+
   // Specification v2.0 Section 9: Co-Worker Agent Bounded Execution, Approval Queue & Kill Switch
   api.post('/admin/agent/run', adminGuard, async (req: AuthRequest, res) => {
     try {

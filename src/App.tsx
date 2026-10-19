@@ -157,7 +157,7 @@ export default function App() {
           path="/admin"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="dashboard" />
             </ProtectedRoute>
           }
         />
@@ -165,7 +165,15 @@ export default function App() {
           path="/admin/sellers"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="sellers" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/kyc"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <AdminConsolePage initialTab="kyc" />
             </ProtectedRoute>
           }
         />
@@ -173,7 +181,7 @@ export default function App() {
           path="/admin/stores"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="stores" />
             </ProtectedRoute>
           }
         />
@@ -181,7 +189,7 @@ export default function App() {
           path="/admin/products"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="products" />
             </ProtectedRoute>
           }
         />
@@ -189,7 +197,7 @@ export default function App() {
           path="/admin/orders"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="orders" />
             </ProtectedRoute>
           }
         />
@@ -197,7 +205,7 @@ export default function App() {
           path="/admin/wallet"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="wallet" />
             </ProtectedRoute>
           }
         />
@@ -205,7 +213,7 @@ export default function App() {
           path="/admin/payouts"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="payouts" />
             </ProtectedRoute>
           }
         />
@@ -213,7 +221,7 @@ export default function App() {
           path="/admin/gateways"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="gateways" />
             </ProtectedRoute>
           }
         />
@@ -221,7 +229,7 @@ export default function App() {
           path="/admin/disputes"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="returns" />
             </ProtectedRoute>
           }
         />
@@ -229,7 +237,7 @@ export default function App() {
           path="/admin/tickets"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="tickets" />
             </ProtectedRoute>
           }
         />
@@ -237,7 +245,7 @@ export default function App() {
           path="/admin/rbac"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="rbac" />
             </ProtectedRoute>
           }
         />
@@ -245,7 +253,7 @@ export default function App() {
           path="/admin/agent"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="agent" />
             </ProtectedRoute>
           }
         />
@@ -253,7 +261,7 @@ export default function App() {
           path="/admin/seo"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="seo" />
             </ProtectedRoute>
           }
         />
@@ -261,7 +269,7 @@ export default function App() {
           path="/admin/ads"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="ads" />
             </ProtectedRoute>
           }
         />
@@ -269,7 +277,7 @@ export default function App() {
           path="/admin/audit"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminConsolePage />
+              <AdminConsolePage initialTab="audit" />
             </ProtectedRoute>
           }
         />

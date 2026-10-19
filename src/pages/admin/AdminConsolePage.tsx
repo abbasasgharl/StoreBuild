@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link, useLocation, Navigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
 import {
   ShieldCheck,
@@ -26,11 +26,19 @@ import {
   CreditCard,
   LogOut,
   RefreshCw,
+  Copy,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Eye,
+  Filter,
+  ArrowUpRight,
 } from 'lucide-react';
 
-type AdminTabId =
+export type AdminTabId =
   | 'dashboard'
   | 'sellers'
+  | 'kyc'
   | 'stores'
   | 'products'
   | 'orders'
@@ -45,16 +53,23 @@ type AdminTabId =
   | 'ads'
   | 'audit';
 
-export default function AdminConsolePage() {
+export default function AdminConsolePage({ initialTab }: { initialTab?: AdminTabId }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { session, signOutUser, loginAdminWith2FA, authFetch } = useAuth();
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<AdminTabId>('dashboard');
+  const [activeTab, setActiveTab] = useState<AdminTabId>(initialTab || 'dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [banner, setBanner] = useState('');
   const [errorBanner, setErrorBanner] = useState('');
+
+  // Dedicated filter states for Sellers, KYC, and Store Links
+  const [sellerStatusFilter, setSellerStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
+  const [kycStatusFilter, setKycStatusFilter] = useState<'all' | 'Pending Review' | 'Verified' | 'Rejected'>('all');
+  const [storeVisibilityFilter, setStoreVisibilityFilter] = useState<'all' | 'published' | 'unpublished'>('all');
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
 
   // Admin 2FA In-Page Authentication Gate state
   const [adminLoginUser, setAdminLoginUser] = useState('');
@@ -87,7 +102,10 @@ export default function AdminConsolePage() {
       | 'toggle_store_suspension'
       | 'toggle_wallet_hold'
       | 'approve_payout'
-      | 'verify_payout_account';
+      | 'verify_payout_account'
+      | 'approve_kyc'
+      | 'reject_kyc'
+      | 'toggle_store_publish';
     storeId: number;
     payoutId?: number;
   } | null>(null);
@@ -118,14 +136,27 @@ export default function AdminConsolePage() {
   const [seoGoogleVerify, setSeoGoogleVerify] = useState('');
   const [seoBingVerify, setSeoBingVerify] = useState('');
 
+  // Synchronize route with active tab (Deep Linking & direct URL refresh support)
   useEffect(() => {
     const p = location.pathname;
-    if (p.includes('/admin/sellers')) setActiveTab('sellers');
-    else if (p.includes('/admin/orders')) setActiveTab('orders');
-    else if (p.includes('/admin/payouts')) setActiveTab('payouts');
-    else if (p.includes('/admin/gateways')) setActiveTab('gateways');
-    else if (p.includes('/admin/audit')) setActiveTab('audit');
-  }, [location.pathname]);
+    if (p === '/admin/sellers' || p.startsWith('/admin/sellers')) setActiveTab('sellers');
+    else if (p === '/admin/kyc' || p.startsWith('/admin/kyc')) setActiveTab('kyc');
+    else if (p === '/admin/stores' || p.startsWith('/admin/stores')) setActiveTab('stores');
+    else if (p === '/admin/products' || p.startsWith('/admin/products')) setActiveTab('products');
+    else if (p === '/admin/orders' || p.startsWith('/admin/orders')) setActiveTab('orders');
+    else if (p === '/admin/wallet' || p.startsWith('/admin/wallet')) setActiveTab('wallet');
+    else if (p === '/admin/payouts' || p.startsWith('/admin/payouts')) setActiveTab('payouts');
+    else if (p === '/admin/gateways' || p.startsWith('/admin/gateways')) setActiveTab('gateways');
+    else if (p === '/admin/disputes' || p.startsWith('/admin/disputes') || p === '/admin/returns') setActiveTab('returns');
+    else if (p === '/admin/tickets' || p.startsWith('/admin/tickets')) setActiveTab('tickets');
+    else if (p === '/admin/rbac' || p.startsWith('/admin/rbac')) setActiveTab('rbac');
+    else if (p === '/admin/agent' || p.startsWith('/admin/agent')) setActiveTab('agent');
+    else if (p === '/admin/seo' || p.startsWith('/admin/seo')) setActiveTab('seo');
+    else if (p === '/admin/ads' || p.startsWith('/admin/ads')) setActiveTab('ads');
+    else if (p === '/admin/audit' || p.startsWith('/admin/audit')) setActiveTab('audit');
+    else if (p === '/admin') setActiveTab('dashboard');
+    else if (initialTab) setActiveTab(initialTab);
+  }, [location.pathname, initialTab]);
 
   const syncSeoState = (overview: any) => {
     if (overview?.seoSettings) {
@@ -162,24 +193,45 @@ export default function AdminConsolePage() {
     setSubmittingAction(true);
     setErrorBanner('');
     try {
-      const res = await authFetch('/api/admin/action', {
-        method: 'POST',
-        body: JSON.stringify({
-          actionType: confirmModal.actionType,
-          storeId: confirmModal.storeId,
-          payoutId: confirmModal.payoutId,
-          reason: confirmReason,
-        }),
-      });
-      const updated = await res.json();
-      if (res.ok) {
-        setData(updated);
-        setBanner(
-          `Admin action "${confirmModal.title}" executed and recorded in the immutable Audit Trail.`
-        );
-        setConfirmModal(null);
+      if (confirmModal.actionType === 'approve_kyc' || confirmModal.actionType === 'reject_kyc') {
+        const res = await authFetch('/api/admin/kyc/review', {
+          method: 'POST',
+          body: JSON.stringify({
+            storeId: confirmModal.storeId,
+            status: confirmModal.actionType === 'approve_kyc' ? 'Approved' : 'Rejected',
+            reason: confirmReason,
+          }),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          await loadAdminOverview();
+          setBanner(
+            `Merchant KYC decision "${result.finalStatus}" recorded with audit reasoning.`
+          );
+          setConfirmModal(null);
+        } else {
+          setErrorBanner(result.error || 'KYC review failed');
+        }
       } else {
-        setErrorBanner(updated.error || 'Action failed');
+        const res = await authFetch('/api/admin/action', {
+          method: 'POST',
+          body: JSON.stringify({
+            actionType: confirmModal.actionType,
+            storeId: confirmModal.storeId,
+            payoutId: confirmModal.payoutId,
+            reason: confirmReason,
+          }),
+        });
+        const updated = await res.json();
+        if (res.ok) {
+          setData(updated);
+          setBanner(
+            `Admin action "${confirmModal.title}" executed and recorded in the immutable Audit Trail.`
+          );
+          setConfirmModal(null);
+        } else {
+          setErrorBanner(updated.error || 'Action failed');
+        }
       }
     } finally {
       setSubmittingAction(false);
@@ -448,42 +500,77 @@ export default function AdminConsolePage() {
   const ledger = data?.ledger || [];
   const auditLogs = data?.auditLogs || [];
 
+  const isKycPending = (k?: string) => !k || k === 'Pending Review' || k === 'Pending_Review';
+  const isKycVerified = (k?: string) => k === 'Verified' || k === 'Approved';
+  const isKycRejected = (k?: string) => k === 'Rejected';
+
+  const pendingKycCount = sellers.filter(
+    (s: any) => isKycPending(s.profile?.kycStatus)
+  ).length;
+
+  const handleTabClick = (tabId: AdminTabId) => {
+    setActiveTab(tabId);
+    const routeMap: Record<AdminTabId, string> = {
+      dashboard: '/admin',
+      sellers: '/admin/sellers',
+      kyc: '/admin/kyc',
+      stores: '/admin/stores',
+      products: '/admin/products',
+      orders: '/admin/orders',
+      wallet: '/admin/wallet',
+      payouts: '/admin/payouts',
+      gateways: '/admin/gateways',
+      returns: '/admin/disputes',
+      tickets: '/admin/tickets',
+      rbac: '/admin/rbac',
+      agent: '/admin/agent',
+      seo: '/admin/seo',
+      ads: '/admin/ads',
+      audit: '/admin/audit',
+    };
+    const target = routeMap[tabId] || '/admin';
+    if (location.pathname !== target) {
+      navigate(target);
+    }
+  };
+
   const navLinks: { id: AdminTabId; label: string; icon: any; badge?: number }[] = [
     { id: 'dashboard', label: '1. Overview Dashboard', icon: LayoutDashboard },
-    { id: 'sellers', label: '2. Sellers & KYC', icon: Users },
-    { id: 'stores', label: '3. Stores & Slugs', icon: Store },
-    { id: 'products', label: '4. Products (≥4 Photos)', icon: Package },
-    { id: 'orders', label: '5. Orders & Payments', icon: ShoppingBag },
-    { id: 'wallet', label: '6. Wallet & Ledger', icon: WalletIcon },
-    { id: 'payouts', label: '7. Payouts & Holds', icon: Landmark },
-    { id: 'gateways', label: '8. Payment Gateways & Rails', icon: CreditCard },
+    { id: 'sellers', label: '2. Seller Accounts', icon: Users },
+    { id: 'kyc', label: '3. KYC Review Queue', icon: ShieldCheck, badge: pendingKycCount },
+    { id: 'stores', label: '4. Stores & Slugs', icon: Store },
+    { id: 'products', label: '5. Products (≥4 Photos)', icon: Package },
+    { id: 'orders', label: '6. Orders & Payments', icon: ShoppingBag },
+    { id: 'wallet', label: '7. Wallet & Ledger', icon: WalletIcon },
+    { id: 'payouts', label: '8. Payouts & Holds', icon: Landmark },
+    { id: 'gateways', label: '9. Payment Gateways & Rails', icon: CreditCard },
     {
       id: 'returns',
-      label: '9. Returns & Disputes',
+      label: '10. Returns & Disputes',
       icon: RotateCcw,
       badge: metrics.openReturnsCount,
     },
     {
       id: 'tickets',
-      label: '10. Support Tickets',
+      label: '11. Support Tickets',
       icon: LifeBuoy,
       badge: metrics.unresolvedTicketsCount,
     },
-    { id: 'rbac', label: '11. Roles & Permissions', icon: KeyRound },
+    { id: 'rbac', label: '12. Roles & Permissions', icon: KeyRound },
     {
       id: 'agent',
-      label: '12. Co-Worker Agent',
+      label: '13. Co-Worker Agent',
       icon: Bot,
       badge: metrics.pendingAgentApprovalsCount,
     },
-    { id: 'seo', label: '13. SEO Control Panel', icon: Globe },
-    { id: 'ads', label: '14. Ads & Analytics', icon: Megaphone },
-    { id: 'audit', label: '15. Immutable Audit Logs', icon: FileText },
+    { id: 'seo', label: '14. SEO Control Panel', icon: Globe },
+    { id: 'ads', label: '15. Ads & Analytics', icon: Megaphone },
+    { id: 'audit', label: '16. Immutable Audit Logs', icon: FileText },
   ];
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#111827] flex">
-      {/* Left Admin Sidebar (15 Specification v2.0 Modules) */}
+      {/* Left Admin Sidebar (16 Specification v2.0 Modules) */}
       <aside className="w-64 bg-[#111827] text-white hidden lg:flex flex-col shrink-0">
         <div className="h-16 px-6 border-b border-gray-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -501,7 +588,7 @@ export default function AdminConsolePage() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => handleTabClick(item.id)}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-[8px] text-xs font-semibold transition-colors ${
                   isActive
                     ? 'bg-[#2563EB] text-white'
@@ -655,150 +742,785 @@ export default function AdminConsolePage() {
           </div>
 
           {/* ============================================================== */}
-          {/* MODULE 1, 2 & 3: OVERVIEW / SELLERS / STORES                   */}
+          {/* MODULE 1: PLATFORM OVERVIEW DASHBOARD                          */}
           {/* ============================================================== */}
-          {(activeTab === 'dashboard' || activeTab === 'sellers' || activeTab === 'stores') && (
-            <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-x-auto">
-              <div className="p-5 border-b border-[#E5E7EB] flex items-center justify-between">
-                <div>
-                  <h2 className="font-display text-base font-bold text-[#111827]">
-                    Seller Accounts, Storefront Slugs & Wallet Governance
-                  </h2>
-                  <p className="text-xs text-[#6B7280]">
-                    Sensitive actions (suspending a store, placing a wallet hold, verifying bank
-                    changes) require explicit confirmation and write to the immutable audit log.
-                  </p>
+          {activeTab === 'dashboard' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-5 flex flex-col justify-between shadow-xs">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#6B7280]">Seller Accounts</span>
+                      <Users className="w-4 h-4 text-[#2563EB]" />
+                    </div>
+                    <div className="text-2xl font-bold font-mono text-[#111827] mt-2">
+                      {sellers.length}
+                    </div>
+                    <p className="text-xs text-[#6B7280] mt-1">
+                      {sellers.filter((s: any) => s.store?.status === 'active').length} active stores ·{' '}
+                      {sellers.filter((s: any) => s.store?.status === 'suspended').length} suspended
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTabClick('sellers')}
+                    className="mt-4 text-xs font-semibold text-[#2563EB] hover:underline flex items-center gap-1 pt-2 border-t border-[#F1F5F9]"
+                  >
+                    <span>Manage Seller Accounts</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-5 flex flex-col justify-between shadow-xs">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#6B7280]">KYC Compliance Queue</span>
+                      <ShieldCheck className="w-4 h-4 text-[#D97706]" />
+                    </div>
+                    <div className="text-2xl font-bold font-mono text-[#D97706] mt-2">
+                      {pendingKycCount}
+                    </div>
+                    <p className="text-xs text-[#6B7280] mt-1">
+                      {pendingKycCount > 0
+                        ? `${pendingKycCount} pending administrative identity reviews`
+                        : 'All seller compliance reviews up to date'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTabClick('kyc')}
+                    className="mt-4 text-xs font-semibold text-[#D97706] hover:underline flex items-center gap-1 pt-2 border-t border-[#F1F5F9]"
+                  >
+                    <span>Open KYC Verification Queue</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-5 flex flex-col justify-between shadow-xs">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#6B7280]">Storefront Slugs & URLs</span>
+                      <Store className="w-4 h-4 text-[#16A34A]" />
+                    </div>
+                    <div className="text-2xl font-bold font-mono text-[#16A34A] mt-2">
+                      {sellers.filter((s: any) => s.store?.isPublished).length} / {sellers.length}
+                    </div>
+                    <p className="text-xs text-[#6B7280] mt-1">
+                      Live published storefronts across platform
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTabClick('stores')}
+                    className="mt-4 text-xs font-semibold text-[#16A34A] hover:underline flex items-center gap-1 pt-2 border-t border-[#F1F5F9]"
+                  >
+                    <span>View Store Links & Visibility</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC] text-[#6B7280]">
-                    <th className="py-3.5 px-4 font-semibold">Store & Public Slug</th>
-                    <th className="py-3.5 px-4 font-semibold">Setup Plan & KYC</th>
-                    <th className="py-3.5 px-4 font-semibold">Payout Destination (Masked)</th>
-                    <th className="py-3.5 px-4 font-semibold text-right">Available / Held</th>
-                    <th className="py-3.5 px-4 font-semibold">Status</th>
-                    <th className="py-3.5 px-4 font-semibold text-right">Governance Controls</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E5E7EB]">
-                  {sellers
-                    .filter(
-                      (s: any) =>
-                        !searchTerm ||
-                        s.store.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                        s.store.slug.toLowerCase().includes(searchTerm.toLowerCase())
-                    )
-                    .map((item: any) => {
-                      const st = item.store;
-                      const prof = item.profile || {};
-                      const wal = item.wallet || {};
-                      const pa = item.payoutAccount || {};
-                      return (
-                        <tr key={st.id} className="hover:bg-[#F8FAFC]">
-                          <td className="py-3.5 px-4">
-                            <div className="font-bold text-[#111827]">{st.name}</div>
-                            <Link
-                              to={`/${st.slug}`}
-                              className="font-mono text-[#2563EB] hover:underline"
-                            >
-                              platform.com/{st.slug}
-                            </Link>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <div className="font-medium text-[#111827]">
-                              {prof.setupPlan} (₹{prof.setupFeeAmount})
-                            </div>
-                            <div className="font-mono text-[11px] text-[#16A34A]">
-                              OTP Verified · {prof.kycStatus}
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono">
-                            <div>
-                              {pa.method === 'upi'
-                                ? `UPI: ${pa.upiId}`
-                                : `${pa.bankName} (${pa.maskedAccountNumber})`}
-                            </div>
-                            <div className="text-[11px] text-[#6B7280]">
-                              {pa.verificationStatus}
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono text-right">
-                            <div className="font-bold text-[#16A34A]">
-                              Avail: ₹{Number(wal.availableBalance || 0).toLocaleString('en-IN')}
-                            </div>
-                            <div className="text-[#D97706]">
-                              Held: ₹{Number(wal.heldBalance || 0).toLocaleString('en-IN')}
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <div
-                              className={`font-semibold ${
-                                st.status === 'active' ? 'text-[#16A34A]' : 'text-[#DC2626]'
-                              }`}
-                            >
-                              Store: {st.status.toUpperCase()}
-                            </div>
-                            <div className="text-[11px] text-[#6B7280]">
-                              Wallet: {wal.isOnHold ? 'ON HOLD' : 'Active'}
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmModal({
-                                  open: true,
-                                  title:
-                                    st.status === 'active'
-                                      ? `Suspend Store /${st.slug}`
-                                      : `Reactivate Store /${st.slug}`,
-                                  actionType: 'toggle_store_suspension',
-                                  storeId: st.id,
-                                })
-                              }
-                              className="px-2.5 py-1.5 rounded-[6px] border border-[#E5E7EB] hover:border-[#DC2626] text-[#111827] font-semibold"
-                            >
-                              {st.status === 'active' ? 'Suspend Store' : 'Reactivate'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmModal({
-                                  open: true,
-                                  title: wal.isOnHold
-                                    ? `Release Wallet Hold (/ ${st.slug})`
-                                    : `Place Wallet Hold (/ ${st.slug})`,
-                                  actionType: 'toggle_wallet_hold',
-                                  storeId: st.id,
-                                })
-                              }
-                              className="px-2.5 py-1.5 rounded-[6px] border border-[#E5E7EB] hover:border-[#D97706] text-[#111827] font-semibold"
-                            >
-                              {wal.isOnHold ? 'Lift Wallet Hold' : 'Hold Wallet'}
-                            </button>
-                            {pa.verificationStatus !== 'Verified' && (
+
+              {/* Recent Activity & Core Operations Overview */}
+              <div className="bg-white border border-[#E5E7EB] rounded-[12px] p-5 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-[#E5E7EB]">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#111827]">
+                      Platform Operations & Settlement Health
+                    </h2>
+                    <p className="text-xs text-[#6B7280]">
+                      System-wide status of seller earnings, collection gateway rails, and governance events.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleTabClick('wallet')}
+                      className="px-3 py-1.5 rounded-[6px] border border-[#E5E7EB] text-xs font-semibold hover:bg-[#F8FAFC]"
+                    >
+                      Ledger & Wallets
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTabClick('gateways')}
+                      className="px-3 py-1.5 rounded-[6px] bg-[#2563EB] text-white text-xs font-semibold hover:bg-blue-700"
+                    >
+                      Gateway Rails
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                  <div className="p-3.5 bg-[#F8FAFC] rounded-[8px] border border-[#E5E7EB]">
+                    <div className="text-[#6B7280]">Total Orders Processed</div>
+                    <div className="text-base font-bold font-mono text-[#111827] mt-1">{orders.length}</div>
+                  </div>
+                  <div className="p-3.5 bg-[#F8FAFC] rounded-[8px] border border-[#E5E7EB]">
+                    <div className="text-[#6B7280]">Settled Payouts</div>
+                    <div className="text-base font-bold font-mono text-[#16A34A] mt-1">
+                      ₹{Number(metrics.paidOutTotal || 0).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="p-3.5 bg-[#F8FAFC] rounded-[8px] border border-[#E5E7EB]">
+                    <div className="text-[#6B7280]">Open Returns & Disputes</div>
+                    <div className="text-base font-bold font-mono text-[#DC2626] mt-1">
+                      {returns.filter((r: any) => r.status === 'Return Requested').length}
+                    </div>
+                  </div>
+                  <div className="p-3.5 bg-[#F8FAFC] rounded-[8px] border border-[#E5E7EB]">
+                    <div className="text-[#6B7280]">Audit Trail Records</div>
+                    <div className="text-base font-bold font-mono text-[#111827] mt-1">{auditLogs.length}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* MODULE 2: SELLERS PAGE (Spec v2.0 Section 10)                  */}
+          {/* ============================================================== */}
+          {activeTab === 'sellers' && (
+            <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-hidden shadow-xs">
+              <div className="p-5 border-b border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-[#2563EB]" />
+                    <h2 className="font-display text-base font-bold text-[#111827]">
+                      Seller Accounts Management
+                    </h2>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-1">
+                    Direct seller accounts registry. Tracks owner identity, verified email status, business name, registration timestamp, account state, and lifecycle controls.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-[#6B7280]">State Filter:</span>
+                  <div className="inline-flex rounded-[8px] border border-[#E5E7EB] p-0.5 bg-[#F8FAFC] text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSellerStatusFilter('all')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        sellerStatusFilter === 'all'
+                          ? 'bg-white shadow-xs text-[#111827]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      All ({sellers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSellerStatusFilter('active')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        sellerStatusFilter === 'active'
+                          ? 'bg-white shadow-xs text-[#16A34A]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      Active ({sellers.filter((s: any) => s.store.status === 'active').length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSellerStatusFilter('suspended')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        sellerStatusFilter === 'suspended'
+                          ? 'bg-white shadow-xs text-[#DC2626]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      Suspended ({sellers.filter((s: any) => s.store.status === 'suspended').length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC] text-[#6B7280]">
+                      <th className="py-3.5 px-4 font-semibold">Seller & Owner</th>
+                      <th className="py-3.5 px-4 font-semibold">Business Name & Plan</th>
+                      <th className="py-3.5 px-4 font-semibold">Signed-Up Date</th>
+                      <th className="py-3.5 px-4 font-semibold">Email & OTP Status</th>
+                      <th className="py-3.5 px-4 font-semibold">Current Account State</th>
+                      <th className="py-3.5 px-4 font-semibold text-right">Lifecycle Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E5E7EB]">
+                    {sellers
+                      .filter((s: any) => {
+                        const matchesSearch =
+                          !searchTerm ||
+                          s.store.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          s.store.slug.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (s.profile?.businessName &&
+                            s.profile.businessName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                          (s.user?.email && s.user.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                          (s.user?.fullName && s.user.fullName.toLowerCase().includes(searchTerm.toLowerCase()));
+                        const matchesFilter =
+                          sellerStatusFilter === 'all' || s.store.status === sellerStatusFilter;
+                        return matchesSearch && matchesFilter;
+                      })
+                      .map((item: any) => {
+                        const st = item.store;
+                        const prof = item.profile || {};
+                        const usr = item.user || {};
+                        const wal = item.wallet || {};
+                        const signedUp = usr.createdAt || prof.createdAt || st.createdAt;
+                        return (
+                          <tr key={st.id} className="hover:bg-[#F8FAFC]">
+                            <td className="py-3.5 px-4">
+                              <div className="font-bold text-[#111827]">
+                                {usr.fullName || st.name}
+                              </div>
+                              <div className="text-[11px] text-[#6B7280]">
+                                {usr.email || st.contactEmail || 'No email registered'}
+                              </div>
+                              <div className="font-mono text-[10px] text-[#9CA3AF] mt-0.5">
+                                UID: {st.uid}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="font-semibold text-[#111827]">
+                                {prof.businessName || st.name}
+                              </div>
+                              <div className="text-[11px] text-[#4B5563]">
+                                Plan: <span className="font-medium text-[#2563EB]">{prof.setupPlan || 'Standard'}</span> (₹{prof.setupFeeAmount || 1999})
+                              </div>
+                              <div className="font-mono text-[10px] text-[#6B7280] mt-0.5">
+                                {prof.setupFeePaid ? (
+                                  <span className="text-[#16A34A] font-semibold">Fee Paid</span>
+                                ) : (
+                                  <span className="text-[#D97706]">Fee Pending · {prof.setupPaymentRef || 'No Ref'}</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-[#4B5563]">
+                              {signedUp ? new Date(signedUp).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              }) : '—'}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div>
+                                {prof.otpVerified ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] bg-emerald-50 text-emerald-700 font-semibold text-[11px]">
+                                    <CheckCircle className="w-3 h-3" />
+                                    OTP Verified
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] bg-amber-50 text-amber-700 font-semibold text-[11px]">
+                                    <Clock className="w-3 h-3" />
+                                    Pending Verification
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-[#6B7280] mt-1">
+                                User Account: {usr.status || 'active'}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`w-2 h-2 rounded-full ${
+                                    st.status === 'active' ? 'bg-[#16A34A]' : 'bg-[#DC2626]'
+                                  }`}
+                                ></span>
+                                <span
+                                  className={`font-semibold capitalize ${
+                                    st.status === 'active' ? 'text-[#16A34A]' : 'text-[#DC2626]'
+                                  }`}
+                                >
+                                  {st.status}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-[#6B7280] mt-0.5">
+                                Wallet: {wal.isOnHold ? (
+                                  <span className="text-[#D97706] font-semibold">On Hold</span>
+                                ) : (
+                                  <span className="text-[#16A34A]">Active</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() =>
                                   setConfirmModal({
                                     open: true,
-                                    title: `Verify Payout Account (/ ${st.slug})`,
-                                    actionType: 'verify_payout_account',
+                                    title:
+                                      st.status === 'active'
+                                        ? `Suspend Seller /${st.slug}`
+                                        : `Reactivate Seller /${st.slug}`,
+                                    actionType: 'toggle_store_suspension',
                                     storeId: st.id,
                                   })
                                 }
-                                className="px-2.5 py-1.5 rounded-[6px] bg-[#2563EB] text-white font-semibold"
+                                className={`px-2.5 py-1.5 rounded-[6px] border text-xs font-semibold transition-colors ${
+                                  st.status === 'active'
+                                    ? 'border-[#E5E7EB] hover:border-[#DC2626] text-[#DC2626] hover:bg-rose-50'
+                                    : 'border-emerald-300 text-[#16A34A] hover:bg-emerald-50'
+                                }`}
                               >
-                                Verify Bank
+                                {st.status === 'active' ? 'Suspend Store' : 'Reactivate'}
                               </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConfirmModal({
+                                    open: true,
+                                    title: wal.isOnHold
+                                      ? `Release Wallet Hold (/ ${st.slug})`
+                                      : `Place Wallet Hold (/ ${st.slug})`,
+                                    actionType: 'toggle_wallet_hold',
+                                    storeId: st.id,
+                                  })
+                                }
+                                className="px-2.5 py-1.5 rounded-[6px] border border-[#E5E7EB] hover:border-[#D97706] text-[#4B5563] hover:text-[#D97706] text-xs font-semibold"
+                              >
+                                {wal.isOnHold ? 'Release Hold' : 'Place Hold'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* MODULE 3: KYC COMPLIANCE QUEUE (Spec v2.0 Section 10)          */}
+          {/* ============================================================== */}
+          {activeTab === 'kyc' && (
+            <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-hidden shadow-xs">
+              <div className="p-5 border-b border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-[#D97706]" />
+                    <h2 className="font-display text-base font-bold text-[#111827]">
+                      KYC Compliance & Verification Queue
+                    </h2>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-1">
+                    Dedicated compliance queue for seller identity reviews. Defaults to 'Pending Review'. Only explicit authorized administrative review can mark Verified.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-[#6B7280]">Review Filter:</span>
+                  <div className="inline-flex rounded-[8px] border border-[#E5E7EB] p-0.5 bg-[#F8FAFC] text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setKycStatusFilter('all')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        kycStatusFilter === 'all'
+                          ? 'bg-white shadow-xs text-[#111827]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      All ({sellers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKycStatusFilter('Pending Review')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        kycStatusFilter === 'Pending Review'
+                          ? 'bg-amber-500 text-white shadow-xs'
+                          : 'text-[#D97706] hover:bg-amber-50'
+                      }`}
+                    >
+                      Pending Review ({pendingKycCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKycStatusFilter('Verified')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        kycStatusFilter === 'Verified'
+                          ? 'bg-[#16A34A] text-white shadow-xs'
+                          : 'text-[#16A34A] hover:bg-emerald-50'
+                      }`}
+                    >
+                      Verified ({sellers.filter((s: any) => isKycVerified(s.profile?.kycStatus)).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKycStatusFilter('Rejected')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        kycStatusFilter === 'Rejected'
+                          ? 'bg-[#DC2626] text-white shadow-xs'
+                          : 'text-[#DC2626] hover:bg-rose-50'
+                      }`}
+                    >
+                      Rejected ({sellers.filter((s: any) => isKycRejected(s.profile?.kycStatus)).length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC] text-[#6B7280]">
+                      <th className="py-3.5 px-4 font-semibold">Seller & Store Entity</th>
+                      <th className="py-3.5 px-4 font-semibold">Submitted Identity Records</th>
+                      <th className="py-3.5 px-4 font-semibold">Timestamp Details</th>
+                      <th className="py-3.5 px-4 font-semibold">Compliance Status & Notes</th>
+                      <th className="py-3.5 px-4 font-semibold text-right">Administrative Triggers</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E5E7EB]">
+                    {sellers
+                      .filter((s: any) => {
+                        const rawStatus = s.profile?.kycStatus;
+                        let matchesFilter = true;
+                        if (kycStatusFilter === 'Pending Review') {
+                          matchesFilter = isKycPending(rawStatus);
+                        } else if (kycStatusFilter === 'Verified') {
+                          matchesFilter = isKycVerified(rawStatus);
+                        } else if (kycStatusFilter === 'Rejected') {
+                          matchesFilter = isKycRejected(rawStatus);
+                        }
+                        const matchesSearch =
+                          !searchTerm ||
+                          s.store.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          s.store.slug.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (s.profile?.businessName &&
+                            s.profile.businessName.toLowerCase().includes(searchTerm.toLowerCase()));
+                        return matchesFilter && matchesSearch;
+                      })
+                      .map((item: any) => {
+                        const st = item.store;
+                        const prof = item.profile || {};
+                        const pa = item.payoutAccount || {};
+                        const currentKyc = prof.kycStatus;
+
+                        return (
+                          <tr key={st.id} className="hover:bg-[#F8FAFC]">
+                            <td className="py-3.5 px-4">
+                              <div className="font-bold text-[#111827]">{st.name}</div>
+                              <div className="text-[11px] text-[#4B5563]">
+                                Business: {prof.businessName || st.name}
+                              </div>
+                              <div className="font-mono text-[10px] text-[#9CA3AF] mt-0.5">
+                                UID: {st.uid}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="font-medium text-[#111827]">
+                                Entity Type: {prof.setupPlan || 'Sole Proprietorship'}
+                              </div>
+                              <div className="font-mono text-[11px] text-[#4B5563]">
+                                Payout Link: {pa.method === 'upi' ? `UPI: ${pa.upiId}` : `${pa.bankName || 'Bank'} (${pa.maskedAccountNumber || 'Unlinked'})`}
+                              </div>
+                              <div className="text-[10px] text-[#6B7280] mt-0.5">
+                                Onboarding Progress: Step {prof.onboardingStep || 8} of 8
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-[#4B5563]">
+                              <div>
+                                Reg: {prof.createdAt ? new Date(prof.createdAt).toLocaleDateString('en-IN') : '—'}
+                              </div>
+                              <div className="text-[10px] text-[#9CA3AF]">
+                                {prof.createdAt ? new Date(prof.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div>
+                                {isKycVerified(currentKyc) && (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[6px] bg-emerald-50 text-[#16A34A] font-bold text-xs border border-emerald-200">
+                                    <CheckCircle className="w-3.5 h-3.5" />
+                                    Verified
+                                  </span>
+                                )}
+                                {isKycPending(currentKyc) && (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[6px] bg-amber-50 text-[#D97706] font-bold text-xs border border-amber-200">
+                                    <Clock className="w-3.5 h-3.5" />
+                                    Pending Review
+                                  </span>
+                                )}
+                                {isKycRejected(currentKyc) && (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[6px] bg-rose-50 text-[#DC2626] font-bold text-xs border border-rose-200">
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    Rejected
+                                  </span>
+                                )}
+                              </div>
+                              {prof.suspendedReason && (
+                                <div className="text-[11px] text-[#DC2626] mt-1 bg-rose-50/50 p-1 rounded-[4px] border border-rose-100">
+                                  Note: {prof.suspendedReason}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                              {!isKycVerified(currentKyc) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmModal({
+                                      open: true,
+                                      title: `Approve KYC Verification (/ ${st.slug})`,
+                                      actionType: 'approve_kyc',
+                                      storeId: st.id,
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 rounded-[6px] bg-[#16A34A] hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs"
+                                >
+                                  Approve KYC
+                                </button>
+                              )}
+                              {!isKycRejected(currentKyc) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmModal({
+                                      open: true,
+                                      title: `Reject KYC Submission (/ ${st.slug})`,
+                                      actionType: 'reject_kyc',
+                                      storeId: st.id,
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 rounded-[6px] border border-rose-200 hover:border-[#DC2626] text-[#DC2626] hover:bg-rose-50 text-xs font-semibold"
+                                >
+                                  Reject
+                                </button>
+                              )}
+                              {isKycVerified(currentKyc) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmModal({
+                                      open: true,
+                                      title: `Request KYC Resubmission (/ ${st.slug})`,
+                                      actionType: 'reject_kyc',
+                                      storeId: st.id,
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 rounded-[6px] border border-[#E5E7EB] hover:border-amber-400 text-[#4B5563] text-xs font-semibold"
+                                >
+                                  Request Re-Review
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* MODULE 4: STORE LINKS & SLUG REGISTRY (Spec v2.0 Section 10)  */}
+          {/* ============================================================== */}
+          {activeTab === 'stores' && (
+            <div className="bg-white border border-[#E5E7EB] rounded-[12px] overflow-hidden shadow-xs">
+              <div className="p-5 border-b border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Store className="w-5 h-5 text-[#16A34A]" />
+                    <h2 className="font-display text-base font-bold text-[#111827]">
+                      Store Slug Registry & Storefront Visibility
+                    </h2>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-1">
+                    Manages independent storefront shop names, canonical slugs, live storefront URLs, total catalog product count, and public visibility switches.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-[#6B7280]">Visibility:</span>
+                  <div className="inline-flex rounded-[8px] border border-[#E5E7EB] p-0.5 bg-[#F8FAFC] text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setStoreVisibilityFilter('all')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        storeVisibilityFilter === 'all'
+                          ? 'bg-white shadow-xs text-[#111827]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      All ({sellers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoreVisibilityFilter('published')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        storeVisibilityFilter === 'published'
+                          ? 'bg-white shadow-xs text-[#16A34A]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      Published ({sellers.filter((s: any) => s.store.isPublished).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoreVisibilityFilter('unpublished')}
+                      className={`px-2.5 py-1 rounded-[6px] font-semibold transition-colors ${
+                        storeVisibilityFilter === 'unpublished'
+                          ? 'bg-white shadow-xs text-[#D97706]'
+                          : 'text-[#6B7280] hover:text-[#111827]'
+                      }`}
+                    >
+                      Draft / Hidden ({sellers.filter((s: any) => !s.store.isPublished).length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC] text-[#6B7280]">
+                      <th className="py-3.5 px-4 font-semibold">Independent Shop Name</th>
+                      <th className="py-3.5 px-4 font-semibold">Active Store URL (StoreLink Layout)</th>
+                      <th className="py-3.5 px-4 font-semibold text-center">Total Catalog Count</th>
+                      <th className="py-3.5 px-4 font-semibold">Visibility Switch</th>
+                      <th className="py-3.5 px-4 font-semibold text-right">Store Governance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E5E7EB]">
+                    {sellers
+                      .filter((s: any) => {
+                        const isPub = Boolean(s.store.isPublished);
+                        const matchesVis =
+                          storeVisibilityFilter === 'all' ||
+                          (storeVisibilityFilter === 'published' && isPub) ||
+                          (storeVisibilityFilter === 'unpublished' && !isPub);
+                        const matchesSearch =
+                          !searchTerm ||
+                          s.store.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          s.store.slug.toLowerCase().includes(searchTerm.toLowerCase());
+                        return matchesVis && matchesSearch;
+                      })
+                      .map((item: any) => {
+                        const st = item.store;
+                        const isPub = Boolean(st.isPublished);
+                        const storeProds = products.filter((p: any) => p.storeId === st.id);
+                        const compliantProds = storeProds.filter((p: any) => (p.photoCount || 0) >= 4);
+
+                        return (
+                          <tr key={st.id} className="hover:bg-[#F8FAFC]">
+                            <td className="py-3.5 px-4">
+                              <div className="font-bold text-[#111827] text-sm">{st.name}</div>
+                              {st.tagline && (
+                                <div className="text-[11px] text-[#6B7280] italic mt-0.5 line-clamp-1">
+                                  "{st.tagline}"
+                                </div>
+                              )}
+                              <div className="font-mono text-[10px] text-[#6B7280] mt-1">
+                                WhatsApp: {st.whatsappNumber || 'Not set'}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {/* StoreLink module component layout */}
+                              <div className="inline-flex items-center gap-2 p-2 rounded-[8px] bg-[#F1F5F9] border border-[#E2E8F0]">
+                                <span className="font-mono font-medium text-[#2563EB]">
+                                  platform.com/{st.slug}
+                                </span>
+                                <Link
+                                  to={`/${st.slug}`}
+                                  target="_blank"
+                                  title="Open live storefront"
+                                  className="p-1 rounded-[4px] hover:bg-white text-[#2563EB] transition-colors"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </Link>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const fullUrl = `${window.location.origin}/${st.slug}`;
+                                    navigator.clipboard.writeText(fullUrl);
+                                    setCopiedSlug(st.slug);
+                                    setTimeout(() => setCopiedSlug(null), 2000);
+                                  }}
+                                  title="Copy Store URL"
+                                  className="p-1 rounded-[4px] hover:bg-white text-[#4B5563] hover:text-[#111827] transition-colors flex items-center gap-1"
+                                >
+                                  {copiedSlug === st.slug ? (
+                                    <span className="text-[10px] font-semibold text-[#16A34A]">Copied!</span>
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-[10px] text-[#6B7280] mt-1 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                <span>Unique Reserved Slug · DNS / Sitemap Active</span>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-center">
+                              <div className="font-mono text-base font-bold text-[#111827]">
+                                {item.productCount || storeProds.length}
+                              </div>
+                              <div className="text-[10px] text-[#6B7280]">
+                                {compliantProds.length}/{storeProds.length} photos compliant
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`px-2.5 py-1 rounded-[6px] font-bold text-xs border ${
+                                    isPub
+                                      ? 'bg-emerald-50 text-[#16A34A] border-emerald-200'
+                                      : 'bg-slate-100 text-[#6B7280] border-slate-200'
+                                  }`}
+                                >
+                                  {isPub ? 'Published (Live)' : 'Draft (Hidden)'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmModal({
+                                      open: true,
+                                      title: isPub
+                                        ? `Unpublish Storefront /${st.slug}`
+                                        : `Publish Storefront /${st.slug}`,
+                                      actionType: 'toggle_store_publish',
+                                      storeId: st.id,
+                                    })
+                                  }
+                                  className="px-2 py-1 rounded-[6px] border border-[#E5E7EB] hover:bg-[#F8FAFC] text-[11px] font-semibold text-[#111827]"
+                                >
+                                  {isPub ? 'Unpublish' : 'Make Live'}
+                                </button>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                              <Link
+                                to={`/${st.slug}`}
+                                target="_blank"
+                                className="px-2.5 py-1.5 rounded-[6px] bg-[#2563EB] text-white font-semibold text-xs inline-flex items-center gap-1 shadow-xs"
+                              >
+                                <span>Preview</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConfirmModal({
+                                    open: true,
+                                    title:
+                                      st.status === 'active'
+                                        ? `Suspend Storefront /${st.slug}`
+                                        : `Reactivate Storefront /${st.slug}`,
+                                    actionType: 'toggle_store_suspension',
+                                    storeId: st.id,
+                                  })
+                                }
+                                className="px-2.5 py-1.5 rounded-[6px] border border-[#E5E7EB] hover:border-[#DC2626] text-[#DC2626] font-semibold text-xs hover:bg-rose-50"
+                              >
+                                {st.status === 'active' ? 'Suspend' : 'Reactivate'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 

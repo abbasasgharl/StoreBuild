@@ -43,7 +43,7 @@ export const sellerProfiles = pgTable('seller_profiles', {
   setupPaymentRef: text('setup_payment_ref').default(''),
   otpVerified: boolean('otp_verified').default(false).notNull(),
   onboardingStep: integer('onboarding_step').default(1).notNull(), // 1..8
-  kycStatus: text('kyc_status').default('Pending Review').notNull(),
+  kycStatus: text('kyc_status').default('Pending_Review').notNull(),
   suspendedReason: text('suspended_reason').default(''),
   createdAt: timestamp('created_at').defaultNow(),
 });
