@@ -74,7 +74,6 @@ export async function runDemoSeed() {
         mobile: '+91 98200 00001',
         role: 'admin',
         status: 'active',
-        twoFactorVerified: true,
       },
       {
         uid: 'agent-ops-copilot',
@@ -86,7 +85,6 @@ export async function runDemoSeed() {
         mobile: '',
         role: 'agent',
         status: 'active',
-        twoFactorVerified: true,
       },
       {
         uid: 'seller-velora-uid',
@@ -98,7 +96,6 @@ export async function runDemoSeed() {
         mobile: '+91 98201 44910',
         role: 'seller',
         status: 'active',
-        twoFactorVerified: true,
       },
       {
         uid: 'seller-arastudio-uid',
@@ -110,7 +107,6 @@ export async function runDemoSeed() {
         mobile: '+91 98330 71200',
         role: 'seller',
         status: 'active',
-        twoFactorVerified: true,
       },
     ])
     .onConflictDoNothing();

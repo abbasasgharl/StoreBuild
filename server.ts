@@ -610,6 +610,82 @@ async function startServer() {
     }
   });
 
+  // ============================================================================
+  // Specification v2.0 Section 9 & Rule N009: Account Termination Routes
+  // ============================================================================
+
+  // Administrative Account Closure Request (7-day + final 2-day reminder schedule)
+  api.post('/admin/sellers/:sellerUid/request-closure', adminGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const { sellerUid } = req.params;
+      const { reason } = req.body;
+      const result = await repo.requestSellerAccountClosure({
+        adminUid: req.user!.uid,
+        sellerUid,
+        reason,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to request account closure' });
+    }
+  });
+
+  // Scheduled Account Closure Worker Trigger (processes due terminations & sends reminders)
+  api.post('/admin/sellers/closure/process-due', adminGuard, async (_req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const results = await repo.processScheduledAccountClosures();
+      res.json(results);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to process scheduled closures' });
+    }
+  });
+
+  // Seller / Link Confirmation for Account Closure (validates single-use token)
+  api.post('/sellers/account/closure/confirm', async (req, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const { token } = req.body;
+      const result = await repo.confirmSellerAccountClosure(token);
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to confirm account closure' });
+    }
+  });
+
+  // Cancel Account Closure (retains store & invalidates termination schedule)
+  api.post('/sellers/account/closure/cancel', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const targetSellerUid = req.user?.role === 'admin' && req.body.sellerUid
+        ? req.body.sellerUid
+        : req.user!.uid;
+      const result = await repo.cancelSellerAccountClosure({
+        sellerUid: targetSellerUid,
+        cancelledByUid: req.user!.uid,
+        reason: req.body.reason,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'Failed to cancel account closure' });
+    }
+  });
+
+  // Get Current Account Closure Status
+  api.get('/sellers/account/closure/status', authGuard, async (req: AuthRequest, res) => {
+    try {
+      const [, repo] = await modulesPromise;
+      const targetSellerUid = req.user?.role === 'admin' && req.query.sellerUid
+        ? String(req.query.sellerUid)
+        : req.user!.uid;
+      const status = await repo.getSellerAccountClosureStatus(targetSellerUid);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to fetch closure status' });
+    }
+  });
+
   // Specification v2.0 Section 9: Co-Worker Agent Bounded Execution, Approval Queue & Kill Switch
   api.post('/admin/agent/run', adminGuard, async (req: AuthRequest, res) => {
     try {

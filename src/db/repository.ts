@@ -33,6 +33,7 @@ import {
   adIntegrations,
   paymentGateways,
   paymentWebhookLogs,
+  accountDeletions,
   auditLogs,
 } from './schema.ts';
 import { eq, desc, and, or, isNull, gte, sql, ne } from 'drizzle-orm';
@@ -690,45 +691,58 @@ export async function registerSellerAndSendOtp(payload: {
     throw new Error(slugCheck.reason);
   }
 
-  const sellerUid = payload.uid?.trim() || `seller_${crypto.randomUUID()}`;
-  const setupPaymentRef = `PAY-SETUP-${Math.floor(10000 + Math.random() * 89999)}`;
-  if (!payload.password || payload.password.trim().length < 8) {
-    throw new Error('A secure password with at least 8 characters is required.');
-  }
-  const pw = hashPassword(payload.password.trim());
+  const cleanEmail = payload.email.trim().toLowerCase();
   const cleanUsername =
     (payload.username || payload.storeSlug).toLowerCase().replace(/[^a-z0-9_]/g, '') ||
     `seller_${Date.now()}`;
 
-  const [user] = await db
+  // 1. Check if email or username already exists first
+  const [existingUser] = await db
+    .select()
+    .from(users)
+    .where(or(eq(users.email, cleanEmail), eq(users.username, cleanUsername)));
+  if (existingUser) {
+    throw new Error('That email address is already registered. Please sign in instead.');
+  }
+
+  // 2. Enforce server-authoritative secure ID generation (Fix G5)
+  const serverGeneratedUid = `seller_${crypto.randomUUID()}`;
+  const setupPaymentRef = `PAY-SETUP-${Math.floor(10000 + Math.random() * 89999)}`;
+
+  if (!payload.password || payload.password.trim().length < 8) {
+    throw new Error('A secure password with at least 8 characters is required.');
+  }
+  const pw = hashPassword(payload.password.trim());
+
+  // 3. Clean Insert strictly matching the hardened schema columns
+  const [newUser] = await db
     .insert(users)
     .values({
-      uid: sellerUid,
+      uid: serverGeneratedUid,
       username: cleanUsername,
-      email: payload.email.toLowerCase().trim(),
+      email: cleanEmail,
       passwordHash: pw.hash,
       passwordSalt: pw.salt,
       fullName: payload.fullName.trim(),
       mobile: payload.mobile.trim(),
       role: 'seller',
       status: 'pending_otp',
-      twoFactorVerified: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     })
-    .onConflictDoUpdate({
-      target: users.uid,
-      set: {
-        email: payload.email.toLowerCase().trim(),
-        fullName: payload.fullName.trim(),
-        status: 'pending_otp',
-      },
-    })
-    .returning();
+    .returning({
+      id: users.id,
+      uid: users.uid,
+      email: users.email,
+      role: users.role,
+      status: users.status,
+    });
 
   await db
     .insert(sellerProfiles)
     .values({
-      userId: user.id,
-      uid: sellerUid,
+      userId: newUser.id,
+      uid: serverGeneratedUid,
       businessName: payload.businessName.trim(),
       setupPlan: payload.setupPlan,
       setupFeeAmount: payload.setupFeeAmount,
@@ -737,26 +751,19 @@ export async function registerSellerAndSendOtp(payload: {
       otpVerified: false,
       onboardingStep: 1,
       kycStatus: 'Pending_Review',
-    })
-    .onConflictDoUpdate({
-      target: sellerProfiles.uid,
-      set: {
-        setupFeeAmount: payload.setupFeeAmount,
-        setupPaymentRef,
-      },
     });
 
   const [store] = await db
     .insert(stores)
     .values({
-      sellerId: user.id,
-      uid: sellerUid,
+      sellerId: newUser.id,
+      uid: serverGeneratedUid,
       slug: slugCheck.slug,
       name: payload.businessName.trim(),
       tagline: `Official Branded Storefront of ${payload.businessName.trim()}`,
       about: `Welcome to ${payload.businessName.trim()}. Every product is crafted and fulfilled directly from our studio.`,
       whatsappNumber: payload.whatsappNumber.replace(/[^0-9]/g, '') || '919820144910',
-      contactEmail: payload.email.toLowerCase().trim(),
+      contactEmail: cleanEmail,
       contactPhone: payload.mobile.trim(),
       seoTitle: `${payload.businessName.trim()} — Official Online Store`,
       seoDescription: `Explore authentic products from ${payload.businessName.trim()} with direct WhatsApp ordering and secure checkout.`,
@@ -778,7 +785,7 @@ export async function registerSellerAndSendOtp(payload: {
     }),
     db.insert(wallets).values({
       storeId: store.id,
-      sellerUid,
+      sellerUid: serverGeneratedUid,
       availableBalance: 0,
       pendingBalance: 0,
       heldBalance: 0,
@@ -788,7 +795,7 @@ export async function registerSellerAndSendOtp(payload: {
     }),
     db.insert(payoutAccounts).values({
       storeId: store.id,
-      sellerUid,
+      sellerUid: serverGeneratedUid,
       method: 'upi',
       upiId: '',
       accountHolderName: payload.fullName.trim(),
@@ -803,7 +810,7 @@ export async function registerSellerAndSendOtp(payload: {
 
   await Promise.all([
     db.insert(otpVerifications).values({
-      email: payload.email.toLowerCase().trim(),
+      email: cleanEmail,
       otpHash,
       demoPlainCode: '', // Never store plaintext OTP
       purpose: 'seller_activation',
@@ -820,7 +827,7 @@ export async function registerSellerAndSendOtp(payload: {
       message: `Setup payment reference ${setupPaymentRef} registered for platform.com/${store.slug}. Complete verification to activate.`,
     }),
     db.insert(auditLogs).values({
-      actorUid: sellerUid,
+      actorUid: serverGeneratedUid,
       actorRole: 'seller',
       storeId: store.id,
       actionType: 'seller_registered',
@@ -832,7 +839,7 @@ export async function registerSellerAndSendOtp(payload: {
 
   // H-12: Never return otpCode in API response
   return {
-    user,
+    user: newUser,
     store,
     setupPaymentRef,
     requiresOtpVerification: true,
@@ -4393,4 +4400,504 @@ export async function exportAnalyticsCsv(filter: { storeId?: number; timeRange?:
   }
 
   return rows.join('\n');
+}
+
+// ============================================================================
+// Specification v2.0 Section 9 & Rule N009: Durable Seller Account Closure
+// ============================================================================
+
+/**
+ * Initiates seller account closure workflow with a 9-day schedule and audit record.
+ */
+export async function requestSellerAccountClosure(params: {
+  adminUid: string;
+  sellerUid: string;
+  reason?: string;
+}) {
+  const { adminUid, sellerUid, reason = 'Administrative termination request' } = params;
+
+  // 1. Validate target seller existence
+  const [sellerUser] = await db.select().from(users).where(eq(users.uid, sellerUid));
+  if (!sellerUser) {
+    throw new Error(`Target seller with UID "${sellerUid}" does not exist.`);
+  }
+
+  const [sellerStore] = await db.select().from(stores).where(eq(stores.uid, sellerUid));
+
+  // 2. Enforce unique active closure lock (Rule N009)
+  const existingActive = await db
+    .select()
+    .from(accountDeletions)
+    .where(
+      and(
+        eq(accountDeletions.sellerUid, sellerUid),
+        or(
+          eq(accountDeletions.status, 'awaiting_seller'),
+          eq(accountDeletions.status, 'confirmed')
+        )
+      )
+    );
+
+  if (existingActive.length > 0) {
+    throw new Error(
+      `An active account closure workflow is already in progress for seller "${sellerUid}" (Status: ${existingActive[0].status}, Scheduled Deletion: ${existingActive[0].scheduledDeleteAt}).`
+    );
+  }
+
+  // 3. Generate cryptographically secure single-use confirmation token
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+  // 9-day grace period: Day 7 sends final 2-day reminder; Day 9 finalizes termination
+  const requestedAt = new Date();
+  const scheduledDeleteAt = new Date(requestedAt.getTime() + 9 * 24 * 3600 * 1000);
+
+  // 4. Record to account_deletions table (clear any old inactive record before inserting)
+  await db.delete(accountDeletions).where(eq(accountDeletions.sellerUid, sellerUid));
+
+  await db
+    .insert(accountDeletions)
+    .values({
+      sellerUid,
+      requestedAt,
+      scheduledDeleteAt,
+      status: 'awaiting_seller',
+      tokenHash,
+      reason: reason.trim(),
+      adminUid,
+      holdReason: '',
+      updatedAt: requestedAt,
+    });
+
+  // 5. Audit Logging & Formal Notification
+  await db.insert(auditLogs).values({
+    actorUid: adminUid,
+    actorRole: 'admin',
+    storeId: sellerStore?.id || null,
+    actionType: 'account_closure_requested',
+    targetEntity: 'seller_account',
+    targetRef: sellerStore?.slug || sellerUid,
+    details: `Admin requested account closure for seller ${sellerUid}. Grace period active until ${scheduledDeleteAt.toISOString()}. Reason: ${reason.trim()}`,
+  });
+
+  if (sellerStore) {
+    await db.insert(notifications).values({
+      storeId: sellerStore.id,
+      recipientRole: 'seller',
+      channel: 'email',
+      category: 'account',
+      title: 'Store Account Closure Requested',
+      message: `Your store account /${sellerStore.slug} has been scheduled for closure on ${scheduledDeleteAt.toLocaleDateString('en-IN')}. Please confirm or cancel this request.`,
+    });
+  }
+
+  return {
+    success: true,
+    sellerUid,
+    storeSlug: sellerStore?.slug,
+    status: 'awaiting_seller' as const,
+    scheduledDeleteAt,
+    confirmationToken: rawToken, // For testing / email delivery
+  };
+}
+
+/**
+ * Validates single-use token and marks closure as seller-confirmed.
+ */
+export async function confirmSellerAccountClosure(rawToken: string) {
+  if (!rawToken || !rawToken.trim()) {
+    throw new Error('A valid single-use confirmation token is required.');
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(rawToken.trim()).digest('hex');
+
+  const [record] = await db
+    .select()
+    .from(accountDeletions)
+    .where(and(eq(accountDeletions.tokenHash, tokenHash), eq(accountDeletions.status, 'awaiting_seller')));
+
+  if (!record) {
+    throw new Error('Invalid, expired, or already confirmed account closure token.');
+  }
+
+  const confirmedAt = new Date();
+  await db
+    .update(accountDeletions)
+    .set({
+      status: 'confirmed',
+      confirmedAt,
+      updatedAt: confirmedAt,
+    })
+    .where(eq(accountDeletions.id, record.id));
+
+  const [store] = await db.select().from(stores).where(eq(stores.uid, record.sellerUid));
+
+  await db.insert(auditLogs).values({
+    actorUid: record.sellerUid,
+    actorRole: 'seller',
+    storeId: store?.id || null,
+    actionType: 'account_closure_confirmed',
+    targetEntity: 'seller_account',
+    targetRef: store?.slug || record.sellerUid,
+    details: `Seller confirmed closure for store /${store?.slug || record.sellerUid}. Scheduled termination date remains ${new Date(record.scheduledDeleteAt).toISOString()}.`,
+  });
+
+  if (store) {
+    await db.insert(notifications).values([
+      {
+        storeId: store.id,
+        recipientRole: 'admin',
+        channel: 'in_app',
+        category: 'compliance',
+        title: `Seller Confirmed Closure — /${store.slug}`,
+        message: `Seller ${record.sellerUid} confirmed closure. Final deletion set for ${new Date(record.scheduledDeleteAt).toLocaleDateString('en-IN')}.`,
+      },
+      {
+        storeId: store.id,
+        recipientRole: 'seller',
+        channel: 'email',
+        category: 'account',
+        title: 'Closure Request Confirmed',
+        message: `Your confirmation was recorded. Your store is scheduled for closure on ${new Date(record.scheduledDeleteAt).toLocaleDateString('en-IN')}.`,
+      },
+    ]);
+  }
+
+  return {
+    success: true,
+    sellerUid: record.sellerUid,
+    status: 'confirmed' as const,
+    scheduledDeleteAt: record.scheduledDeleteAt,
+    confirmedAt,
+  };
+}
+
+/**
+ * Cancels a pending account closure, invalidating the workflow and restoring account state.
+ */
+export async function cancelSellerAccountClosure(params: {
+  sellerUid: string;
+  cancelledByUid: string;
+  reason?: string;
+}) {
+  const { sellerUid, cancelledByUid, reason = 'Closure cancelled by user request' } = params;
+
+  const [record] = await db
+    .select()
+    .from(accountDeletions)
+    .where(
+      and(
+        eq(accountDeletions.sellerUid, sellerUid),
+        or(
+          eq(accountDeletions.status, 'awaiting_seller'),
+          eq(accountDeletions.status, 'confirmed')
+        )
+      )
+    );
+
+  if (!record) {
+    throw new Error(`No pending account closure workflow found for seller "${sellerUid}".`);
+  }
+
+  const cancelledAt = new Date();
+  await db
+    .update(accountDeletions)
+    .set({
+      status: 'cancelled',
+      cancelledAt,
+      holdReason: '',
+      updatedAt: cancelledAt,
+    })
+    .where(eq(accountDeletions.id, record.id));
+
+  const [store] = await db.select().from(stores).where(eq(stores.uid, sellerUid));
+
+  await db.insert(auditLogs).values({
+    actorUid: cancelledByUid,
+    actorRole: cancelledByUid === sellerUid ? 'seller' : 'admin',
+    storeId: store?.id || null,
+    actionType: 'account_closure_cancelled',
+    targetEntity: 'seller_account',
+    targetRef: store?.slug || sellerUid,
+    details: `Account closure cancelled for seller ${sellerUid}. Reason: ${reason.trim()}`,
+  });
+
+  return {
+    success: true,
+    sellerUid,
+    status: 'cancelled' as const,
+    cancelledAt,
+    reason: reason.trim(),
+  };
+}
+
+/**
+ * Validates whether a seller is legally and operationally eligible for termination.
+ * Blocks termination if seller has pending earnings or unfulfilled buyer obligations.
+ */
+export async function checkSellerClosureEligibility(sellerUid: string) {
+  const [store] = await db.select().from(stores).where(eq(stores.uid, sellerUid));
+  if (!store) {
+    throw new Error(`Seller store profile not found for UID "${sellerUid}".`);
+  }
+
+  // 1. Financial Ledger & Wallet Balance Check (Rule N008 & N009)
+  const [wallet] = await db.select().from(wallets).where(eq(wallets.storeId, store.id));
+  if (wallet) {
+    if (wallet.pendingBalance > 0 || wallet.availableBalance > 0 || wallet.heldBalance > 0) {
+      throw new Error(
+        `Account closure blocked: Seller has unsettled financial balance (Available: ₹${wallet.availableBalance}, Pending: ₹${wallet.pendingBalance}, Held: ₹${wallet.heldBalance}). All earnings and payouts must be settled before termination.`
+      );
+    }
+  }
+
+  // 2. Unfulfilled Buyer Obligations Check (Orders in non-terminal state)
+  const openOrders = await db
+    .select()
+    .from(orders)
+    .where(
+      and(
+        eq(orders.storeId, store.id),
+        ne(orders.orderState, 'Delivered'),
+        ne(orders.orderState, 'Cancelled'),
+        ne(orders.orderState, 'Refunded')
+      )
+    );
+
+  if (openOrders.length > 0) {
+    throw new Error(
+      `Account closure blocked: Seller has ${openOrders.length} unfulfilled buyer obligation(s) (e.g. order ${openOrders[0].orderRef} is in "${openOrders[0].orderState}"). All orders must reach final delivery or refund state before closure.`
+    );
+  }
+
+  // 3. Open Returns / Dispute Cases Check
+  const openReturns = await db
+    .select()
+    .from(returns)
+    .where(
+      and(
+        eq(returns.storeId, store.id),
+        ne(returns.status, 'Refund Completed'),
+        ne(returns.status, 'Return Rejected'),
+        ne(returns.status, 'Closed')
+      )
+    );
+
+  if (openReturns.length > 0) {
+    throw new Error(
+      `Account closure blocked: Seller has ${openReturns.length} active customer return/dispute case(s) (e.g. return ${openReturns[0].returnRef} is "${openReturns[0].status}"). Settle all customer disputes before account termination.`
+    );
+  }
+
+  // 4. Open Customer Support Tickets Check
+  const openTickets = await db
+    .select()
+    .from(supportTickets)
+    .where(
+      and(
+        eq(supportTickets.storeId, store.id),
+        ne(supportTickets.status, 'Resolved'),
+        ne(supportTickets.status, 'Closed')
+      )
+    );
+
+  if (openTickets.length > 0) {
+    throw new Error(
+      `Account closure blocked: Seller has ${openTickets.length} unresolved customer support ticket(s). Resolve all open inquiries before account termination.`
+    );
+  }
+
+  return { eligible: true, store, wallet };
+}
+
+/**
+ * Executes final account termination with cascade-safe boundaries:
+ * Preserves accounting entries, ledger lines, and completed orders for statutory audit,
+ * while genericizing customer identity profiles to "Closed store".
+ */
+export async function executeSellerAccountClosure(sellerUid: string, executedByAdminUid = 'system-worker') {
+  // Validate eligibility: will throw if unsettled earnings or unfulfilled obligations exist
+  const { store } = await checkSellerClosureEligibility(sellerUid);
+
+  const completedAt = new Date();
+
+  // 1. Unpublish store & block further storefront access
+  await db
+    .update(stores)
+    .set({
+      isPublished: false,
+      status: 'closed',
+    })
+    .where(eq(stores.id, store.id));
+
+  // 2. Suspend seller user record & invalidate active credentials
+  await db
+    .update(users)
+    .set({
+      status: 'suspended',
+    })
+    .where(eq(users.uid, sellerUid));
+
+  // 3. Revoke all active sessions for this seller
+  await db
+    .update(sessions)
+    .set({
+      revokedAt: completedAt,
+    })
+    .where(eq(sessions.userUid, sellerUid));
+
+  // 4. Genericize customer profiles on completed historical orders for regulatory compliance (Rule N009 & Section 4.2)
+  // Preserves exact amounts, platform fee, timestamps, and order references for tax/statutory audit
+  await db
+    .update(orders)
+    .set({
+      customerName: 'Archived Customer (Closed store)',
+      customerEmail: 'archived@closedstore.internal',
+      customerPhone: '+91 0000000000',
+      shippingAddress: 'Archived for Tax & Regulatory Audit (Closed store)',
+      updatedAt: completedAt,
+    })
+    .where(eq(orders.storeId, store.id));
+
+  // 5. Update account_deletions state
+  await db
+    .update(accountDeletions)
+    .set({
+      status: 'deleted',
+      completedAt,
+      holdReason: '',
+      updatedAt: completedAt,
+    })
+    .where(eq(accountDeletions.sellerUid, sellerUid));
+
+  // 6. Record immutable audit log
+  await db.insert(auditLogs).values({
+    actorUid: executedByAdminUid,
+    actorRole: executedByAdminUid === 'system-worker' ? 'system' : 'admin',
+    storeId: store.id,
+    actionType: 'account_closure_completed',
+    targetEntity: 'seller_account',
+    targetRef: store.slug,
+    details: `Seller account ${sellerUid} termination executed. Store unpublished, credentials revoked, financial records and ledger lines strictly preserved under regulatory audit retention.`,
+  });
+
+  return {
+    success: true,
+    sellerUid,
+    storeId: store.id,
+    storeSlug: store.slug,
+    status: 'deleted' as const,
+    completedAt,
+  };
+}
+
+/**
+ * Scheduled worker for durable account closures:
+ * - Sends Day 7 final 2-day reminder
+ * - Finalizes Day 9 terminations if eligible, or safely applies regulatory hold
+ */
+export async function processScheduledAccountClosures() {
+  const now = new Date();
+  const twoDaysMs = 2 * 24 * 3600 * 1000;
+
+  const pendingRecords = await db
+    .select()
+    .from(accountDeletions)
+    .where(
+      or(
+        eq(accountDeletions.status, 'awaiting_seller'),
+        eq(accountDeletions.status, 'confirmed')
+      )
+    );
+
+  const results: {
+    processed: number;
+    remindersSent: string[];
+    completed: string[];
+    heldForReview: { sellerUid: string; reason: string }[];
+  } = {
+    processed: pendingRecords.length,
+    remindersSent: [],
+    completed: [],
+    heldForReview: [],
+  };
+
+  for (const record of pendingRecords) {
+    const scheduledTime = new Date(record.scheduledDeleteAt).getTime();
+    const currentTime = now.getTime();
+
+    // Case 1: Past scheduled deletion date -> Attempt termination
+    if (currentTime >= scheduledTime) {
+      try {
+        await executeSellerAccountClosure(record.sellerUid, 'system-worker');
+        results.completed.push(record.sellerUid);
+      } catch (err: any) {
+        // Safe hold: do not terminate if financial or buyer obligations are outstanding
+        const holdReason = err.message || 'Account closure held: pending obligations present.';
+        await db
+          .update(accountDeletions)
+          .set({
+            holdReason,
+            updatedAt: now,
+          })
+          .where(eq(accountDeletions.id, record.id));
+
+        await db.insert(auditLogs).values({
+          actorUid: 'system-worker',
+          actorRole: 'system',
+          actionType: 'account_closure_held',
+          targetEntity: 'seller_account',
+          targetRef: record.sellerUid,
+          details: `Scheduled termination postponed: ${holdReason}`,
+        });
+
+        results.heldForReview.push({ sellerUid: record.sellerUid, reason: holdReason });
+      }
+    }
+    // Case 2: Within 2 days of scheduled deletion (Day 7) & reminder not yet sent
+    else if (scheduledTime - currentTime <= twoDaysMs && !record.finalReminderSentAt) {
+      const [store] = await db.select().from(stores).where(eq(stores.uid, record.sellerUid));
+      if (store) {
+        await db.insert(notifications).values({
+          storeId: store.id,
+          recipientRole: 'seller',
+          channel: 'email',
+          category: 'account',
+          title: 'Final Reminder: Store Closure in 2 Days',
+          message: `Your store account /${store.slug} is scheduled to close in 2 days on ${new Date(record.scheduledDeleteAt).toLocaleDateString('en-IN')}. If you wish to cancel this action, please do so before that date.`,
+        });
+      }
+
+      await db
+        .update(accountDeletions)
+        .set({
+          finalReminderSentAt: now,
+          updatedAt: now,
+        })
+        .where(eq(accountDeletions.id, record.id));
+
+      results.remindersSent.push(record.sellerUid);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Retrieves current closure status for a given seller.
+ */
+export async function getSellerAccountClosureStatus(sellerUid: string) {
+  const [record] = await db
+    .select()
+    .from(accountDeletions)
+    .where(eq(accountDeletions.sellerUid, sellerUid));
+
+  if (!record) {
+    return { hasActiveClosure: false };
+  }
+
+  return {
+    hasActiveClosure: record.status === 'awaiting_seller' || record.status === 'confirmed',
+    record,
+  };
 }

@@ -518,6 +518,24 @@ export const paymentWebhookLogs = pgTable('payment_webhook_logs', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const accountDeletions = pgTable('account_deletions', {
+  id: serial('id').primaryKey(),
+  sellerUid: varchar('seller_uid', { length: 255 }).notNull().unique(),
+  requestedAt: timestamp('requested_at').defaultNow().notNull(),
+  scheduledDeleteAt: timestamp('scheduled_delete_at').notNull(),
+  finalReminderSentAt: timestamp('final_reminder_sent_at'),
+  status: text('status').default('awaiting_seller').notNull(), // 'awaiting_seller' | 'confirmed' | 'deleted' | 'cancelled'
+  tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+  reason: text('reason').default(''),
+  adminUid: text('admin_uid').default(''),
+  confirmedAt: timestamp('confirmed_at'),
+  cancelledAt: timestamp('cancelled_at'),
+  completedAt: timestamp('completed_at'),
+  holdReason: text('hold_reason').default(''),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 export const auditLogs = pgTable('audit_logs', {
   id: serial('id').primaryKey(),
   actorUid: text('actor_uid').notNull(),
